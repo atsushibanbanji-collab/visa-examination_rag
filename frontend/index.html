@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>ビザ検定（出題方式 比較版）</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="header">
+      <h1>ビザ検定</h1>
+      <p class="subtitle">出題方式 比較版（固定プール vs RAG）</p>
+    </header>
+
+    <section class="card">
+      <h2>受験者情報</h2>
+      <p class="muted">受験者名を入力してください。同じ名前で再受験すると単元別の連続記録がまとまります。</p>
+      <label for="username">受験者名</label>
+      <input type="text" id="username" placeholder="例：田中太郎" maxlength="50" autocomplete="off">
+    </section>
+
+    <section class="card">
+      <h2>出題方式を選択</h2>
+      <p class="muted">同じ単元を2方式で受験して、出題品質・難度・体感を比べられます。進捗は方式ごとに別管理です。</p>
+      <div class="mode-grid" id="mode-grid">
+        <div class="mode-card selected" data-mode="pool">
+          <div class="mode-badge mode-badge-pool">POOL</div>
+          <h3>固定プール方式</h3>
+          <div class="meta">事前作成の問題集からランダム出題。高速・安定。</div>
+        </div>
+        <div class="mode-card" data-mode="rag">
+          <div class="mode-badge mode-badge-rag">RAG</div>
+          <h3>RAG方式</h3>
+          <div class="meta">原本＋観点からAIが毎回生成。多様だが生成に数秒。</div>
+        </div>
+      </div>
+      <p class="note" id="rag-note" style="display:none;">
+        ※RAG方式は受験開始時にAIが10問生成します（数秒かかります）。
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>難易度を選択</h2>
+      <p class="muted">レベルを選んだ後、単元別に受験できます。</p>
+      <div class="level-grid" id="level-grid">
+        <div class="loading">読み込み中…</div>
+      </div>
+    </section>
+
+    <div class="btn-row">
+      <button class="btn" id="start-btn" disabled>単元を選ぶ</button>
+    </div>
+    <p class="note">※本検定は社内利用を想定しています。回答内容は管理者から閲覧可能です。</p>
+  </div>
+
+  <script>
+    const usernameInput = document.getElementById("username");
+    const levelGrid = document.getElementById("level-grid");
+    const startBtn = document.getElementById("start-btn");
+    const modeGrid = document.getElementById("mode-grid");
+    const ragNote = document.getElementById("rag-note");
+
+    let selectedLevel = null;
+    let selectedMode = "pool";
+    let levels = [];
+
+    const savedName = localStorage.getItem("visa_quiz_username");
+    if (savedName) usernameInput.value = savedName;
+
+    function refreshStart() {
+      const hasName = usernameInput.value.trim().length > 0;
+      startBtn.disabled = !(hasName && selectedLevel);
+    }
+
+    usernameInput.addEventListener("input", refreshStart);
+
+    // 方式カードの選択
+    modeGrid.querySelectorAll(".mode-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        selectedMode = card.dataset.mode;
+        modeGrid.querySelectorAll(".mode-card").forEach((el) => el.classList.remove("selected"));
+        card.classList.add("selected");
+        ragNote.style.display = selectedMode === "rag" ? "block" : "none";
+      });
+    });
+
+    async function loadLevels() {
+      try {
+        const res = await fetch("/api/levels");
+        const data = await res.json();
+        levels = data.levels;
+        renderLevels();
+      } catch (e) {
+        levelGrid.innerHTML = '<div class="empty">難易度情報の取得に失敗しました</div>';
+      }
+    }
+
+    function renderLevels() {
+      levelGrid.innerHTML = "";
+      for (const lv of levels) {
+        const div = document.createElement("div");
+        div.className = "level-card" + (lv.available ? "" : " disabled");
+        div.dataset.id = lv.id;
+
+        let meta;
+        if (lv.available) {
+          const unitText = lv.unit_count > 0
+            ? `${lv.unit_count}単元 / ${lv.pool_size}問`
+            : `${lv.pool_size}問プール`;
+          meta = `<div class="meta">${unitText}</div>`;
+        } else {
+          meta = `<div class="coming-soon">COMING SOON</div>`;
+        }
+
+        div.innerHTML = `<h3>${lv.name}</h3>${meta}`;
+
+        if (lv.available) {
+          div.addEventListener("click", () => {
+            selectedLevel = lv.id;
+            document.querySelectorAll(".level-card").forEach(el => el.classList.remove("selected"));
+            div.classList.add("selected");
+            refreshStart();
+          });
+        }
+        levelGrid.appendChild(div);
+      }
+    }
+
+    startBtn.addEventListener("click", () => {
+      const name = usernameInput.value.trim();
+      if (!name || !selectedLevel) return;
+      localStorage.setItem("visa_quiz_username", name);
+      const params = new URLSearchParams({ user: name, level: selectedLevel, mode: selectedMode });
+      window.location.href = `/units.html?${params.toString()}`;
+    });
+
+    loadLevels();
+  </script>
+</body>
+</html>

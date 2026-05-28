@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>ビザ検定 - 結果</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="header">
+      <h1>ビザ検定</h1>
+      <p class="subtitle" id="user-label"></p>
+    </header>
+
+    <div id="loading" class="loading">結果を表示中…</div>
+
+    <main id="content" style="display:none;">
+      <div class="score-banner" id="score-banner">
+        <div class="label" id="banner-label">SCORE</div>
+        <div class="big"><span id="score">0</span> / <span id="total">0</span></div>
+        <div class="pct" id="pct">0%</div>
+      </div>
+
+      <!-- RAG方式: 生成メトリクス（比較用） -->
+      <section class="card" id="rag-metrics-card" style="display:none;">
+        <h2>RAG生成メトリクス</h2>
+        <div class="rag-metrics" id="rag-metrics"></div>
+        <p class="muted" id="rag-perspectives"></p>
+      </section>
+
+      <!-- 単元クイズ用: 連続記録の更新表示 -->
+      <section class="card" id="streak-banner" style="display:none;">
+        <h2 id="streak-title">連続記録の更新</h2>
+        <div class="streak-update" id="streak-update"></div>
+        <p class="muted" id="streak-message"></p>
+      </section>
+
+      <!-- 卒業試験用: 合否表示 -->
+      <section class="card" id="graduation-banner" style="display:none;">
+        <h2 id="grad-title">卒業試験 結果</h2>
+        <div class="graduation-result" id="grad-result"></div>
+        <p class="muted" id="grad-message"></p>
+      </section>
+
+      <section class="card">
+        <h2>各問の振り返り</h2>
+        <div id="review"></div>
+      </section>
+
+      <section class="card">
+        <h2>過去の受験履歴</h2>
+        <div id="history-area">
+          <div class="loading">読み込み中…</div>
+        </div>
+      </section>
+
+      <div class="btn-row">
+        <a class="btn" id="retry-link" href="#">もう一度受ける</a>
+        <a class="btn" id="next-unit-link" href="#" style="display:none;">次の単元へ →</a>
+        <a class="btn btn-secondary" id="units-link" href="#">単元一覧へ</a>
+      </div>
+    </main>
+  </div>
+
+  <script src="/assets/common.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const username = (params.get("user") || "").trim();
+    const level = params.get("level") || "beginner";
+    const mode = params.get("mode") === "rag" ? "rag" : "pool";
+    const isRag = mode === "rag";
+    const unitsEndpoint = isRag ? "/api/rag/units" : "/api/units";
+
+    const loadingEl = document.getElementById("loading");
+    const contentEl = document.getElementById("content");
+    const userLabel = document.getElementById("user-label");
+    const scoreEl = document.getElementById("score");
+    const totalEl = document.getElementById("total");
+    const pctEl = document.getElementById("pct");
+    const bannerLabel = document.getElementById("banner-label");
+    const scoreBanner = document.getElementById("score-banner");
+    const streakBanner = document.getElementById("streak-banner");
+    const streakUpdate = document.getElementById("streak-update");
+    const streakMessage = document.getElementById("streak-message");
+    const gradBanner = document.getElementById("graduation-banner");
+    const gradResult = document.getElementById("grad-result");
+    const gradMessage = document.getElementById("grad-message");
+    const reviewEl = document.getElementById("review");
+    const historyArea = document.getElementById("history-area");
+    const retryLink = document.getElementById("retry-link");
+    const unitsLink = document.getElementById("units-link");
+
+    // escapeHtml / levelLabel / fmtDate / pillClass は common.js に共通化
+
+    function init() {
+      const raw = sessionStorage.getItem("visa_quiz_last_result");
+      if (!raw) {
+        loadingEl.innerHTML = '結果データが見つかりません。<br><a href="/">トップへ戻る</a>';
+        return;
+      }
+      const result = JSON.parse(raw);
+      const name = result.username || username;
+      const rmode = result.mode === "rag" ? "rag" : (isRag ? "rag" : "pool");
+      const modeTag = rmode === "rag" ? "・RAG方式" : "・固定プール方式";
+      userLabel.textContent = `受験者：${name}（${levelLabel(result.level || level)}${modeTag}）`;
+
+      scoreEl.textContent = result.score;
+      totalEl.textContent = result.total;
+      const pct = result.total > 0 ? Math.round((result.score / result.total) * 100) : 0;
+      pctEl.textContent = `${pct}%`;
+
+      // RAG生成メトリクス
+      if (result.gen_metrics) renderRagMetrics(result.gen_metrics);
+
+      // 戻り先リンク（mode を保持）
+      const unitsParams = new URLSearchParams({ user: name, level: result.level || level, mode: rmode });
+      unitsLink.href = `/units.html?${unitsParams.toString()}`;
+
+      if (result.is_graduation) {
+        renderGraduation(result);
+        retryLink.textContent = "卒業試験をもう一度";
+        const p = new URLSearchParams({
+          user: name, level: result.level || level, unit: "__graduation__", mode: rmode,
+        });
+        retryLink.href = `/quiz.html?${p.toString()}`;
+      } else if (result.unit) {
+        renderUnitStreak(result);
+        retryLink.textContent = "この単元をもう一度";
+        const p = new URLSearchParams({
+          user: name, level: result.level || level, unit: result.unit, mode: rmode,
+        });
+        retryLink.href = `/quiz.html?${p.toString()}`;
+        // 次の未クリア単元への導線を用意（非同期・失敗しても致命的でない）
+        setupNextUnit(name, result.level || level, result.unit, rmode);
+      } else {
+        // 単元なし（旧API互換ケース）。バナー類は出さない。
+        retryLink.href = unitsLink.href;
+      }
+
+      renderReview(result.results);
+      loadingEl.style.display = "none";
+      contentEl.style.display = "block";
+
+      loadHistory(name);
+    }
+
+    async function setupNextUnit(name, lvl, currentUnit, rmode) {
+      try {
+        const p = new URLSearchParams({ level: lvl, user: name });
+        const res = await fetch(`${unitsEndpoint}?${p.toString()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const units = data.units || [];
+        // 現在の単元より後で、まだクリアしていない単元を探す。
+        // 見つからなければ先頭から未クリアを探す（巡回）。
+        const idx = units.findIndex(u => u.id === currentUnit);
+        const ordered = idx >= 0
+          ? units.slice(idx + 1).concat(units.slice(0, idx))
+          : units;
+        const next = ordered.find(u => !u.cleared && u.playable);
+        const nextLink = document.getElementById("next-unit-link");
+        if (next) {
+          const np = new URLSearchParams({ user: name, level: lvl, unit: next.id, mode: rmode });
+          nextLink.href = `/quiz.html?${np.toString()}`;
+          nextLink.textContent = `次の単元へ：${next.name} →`;
+          nextLink.style.display = "inline-block";
+        }
+      } catch (_) {
+        // 取得失敗時はボタンを出さないだけ
+      }
+    }
+
+    function renderRagMetrics(m) {
+      const card = document.getElementById("rag-metrics-card");
+      const grid = document.getElementById("rag-metrics");
+      const persp = document.getElementById("rag-perspectives");
+      const groundingLabel = { pdf: "原本PDF", summary: "観点要約" }[m.grounding] || m.grounding;
+      const cells = [
+        ["生成レイテンシ", m.latency_ms != null ? `${m.latency_ms} ms` : "—"],
+        ["入力トークン", m.input_tokens != null ? m.input_tokens : "—"],
+        ["出力トークン", m.output_tokens != null ? m.output_tokens : "—"],
+        ["モデル", m.model || "—"],
+        ["根拠", groundingLabel || "—"],
+        ["再生成", m.retries != null ? `${m.retries} 回` : "—"],
+      ];
+      grid.innerHTML = cells.map(([k, v]) =>
+        `<div class="rag-metric"><span class="rm-key">${k}</span><span class="rm-val">${escapeHtml(String(v))}</span></div>`
+      ).join("");
+      if (Array.isArray(m.perspective_ids) && m.perspective_ids.length) {
+        persp.textContent = `使用観点: ${m.perspective_ids.join(", ")}（seed: ${m.seed}）`;
+      }
+      card.style.display = "block";
+    }
+
+    function renderUnitStreak(result) {
+      const up = result.unit_progress;
+      if (!up) return;
+      const required = result.required_streak || 3;
+      const passed = result.passed;
+      const newlyCleared = up.newly_cleared;
+
+      streakBanner.style.display = "block";
+
+      // メインの視覚: ドット表現
+      const dots = Array.from({ length: required })
+        .map((_, i) => {
+          const filled = i < up.streak_count;
+          return `<span class="streak-dot big${filled ? " filled" : ""}"></span>`;
+        })
+        .join("");
+
+      let headline;
+      if (newlyCleared) {
+        headline = `<div class="streak-headline cleared">単元クリア達成！</div>`;
+        bannerLabel.textContent = "PERFECT";
+        scoreBanner.classList.add("perfect");
+      } else if (passed) {
+        headline = `<div class="streak-headline perfect">満点！ 連続記録 +1</div>`;
+        bannerLabel.textContent = "PERFECT";
+        scoreBanner.classList.add("perfect");
+      } else {
+        headline = `<div class="streak-headline reset">連続記録は 0 に戻りました</div>`;
+        bannerLabel.textContent = "SCORE";
+      }
+
+      streakUpdate.innerHTML = `
+        ${headline}
+        <div class="streak-dots-big">${dots}</div>
+        <div class="streak-counts">
+          <span class="streak-now">${up.streak_count} / ${required}</span>
+          ${up.best_streak > 0 ? `<span class="streak-best">過去最高 ${up.best_streak}</span>` : ""}
+        </div>
+      `;
+
+      let msg;
+      if (newlyCleared) {
+        msg = "おめでとう。卒業試験への道がまた一歩近づいた。";
+      } else if (passed) {
+        const remain = required - up.streak_count;
+        msg = remain > 0 ? `あと連続 ${remain} 回満点でクリア。` : "クリア条件達成。";
+      } else {
+        msg = "1問でも外すと連続記録は0に戻る仕様。立て直そう。";
+      }
+      streakMessage.textContent = msg;
+    }
+
+    function renderGraduation(result) {
+      const passed = result.passed;
+      const passScore = result.pass_score || 16;
+      gradBanner.style.display = "block";
+
+      if (passed) {
+        bannerLabel.textContent = "GRADUATED";
+        scoreBanner.classList.add("perfect");
+        gradResult.innerHTML = `<div class="streak-headline cleared">合格</div>`;
+        gradMessage.textContent =
+          `${result.score} / ${result.total} 正解。合格基準 ${passScore} 問を超えた。`;
+      } else {
+        bannerLabel.textContent = "FAILED";
+        gradResult.innerHTML = `<div class="streak-headline reset">不合格</div>`;
+        gradMessage.textContent =
+          `合格は ${passScore} / ${result.total} 以上。間違えた問題を復習して再挑戦しよう。`;
+      }
+    }
+
+    function renderReview(results) {
+      reviewEl.innerHTML = "";
+      (results || []).forEach((r, idx) => {
+        const item = document.createElement("div");
+        item.className = "review-item " + (r.is_correct ? "correct" : "wrong");
+
+        const choiceLines = r.choices.map((c, i) => {
+          let cls = "";
+          if (i === r.correct_choice && i === r.user_choice) cls = "user-correct";
+          else if (i === r.user_choice && !r.is_correct) cls = "user-wrong";
+          else if (i === r.correct_choice) cls = "correct-marker";
+          const marker = String.fromCharCode(0x2160 + i);
+          let suffix = "";
+          if (i === r.user_choice) suffix += " ←あなたの回答";
+          if (i === r.correct_choice && i !== r.user_choice) suffix += " ←正解";
+          return `<div class="choice-line ${cls}">${marker}. ${escapeHtml(c)}${suffix}</div>`;
+        }).join("");
+
+        item.innerHTML = `
+          <span class="badge">${r.is_correct ? "正答" : "誤答"}</span>
+          <p class="q">問${idx + 1}. ${escapeHtml(r.question)}</p>
+          ${choiceLines}
+          ${r.explanation ? `<div class="explanation">${escapeHtml(r.explanation)}</div>` : ""}
+        `;
+        reviewEl.appendChild(item);
+      });
+    }
+
+    async function loadHistory(name) {
+      try {
+        // 単元ID→表示名のマップを用意（履歴表示用）。失敗しても致命的でない。
+        let unitNameMap = {};
+        try {
+          const p = new URLSearchParams({ level, user: name });
+          const ures = await fetch(`${unitsEndpoint}?${p.toString()}`);
+          if (ures.ok) {
+            const udata = await ures.json();
+            (udata.units || []).forEach(u => { unitNameMap[u.id] = u.name; });
+          }
+        } catch (_) {}
+
+        const res = await fetch(`/api/history?username=${encodeURIComponent(name)}`);
+        const data = await res.json();
+        renderHistory(data.attempts, unitNameMap);
+      } catch (e) {
+        historyArea.innerHTML = '<div class="empty">履歴の取得に失敗しました</div>';
+      }
+    }
+
+    // pillClass / fmtDate は common.js に共通化
+
+    function renderHistory(attempts, unitNameMap) {
+      unitNameMap = unitNameMap || {};
+      if (!attempts || attempts.length === 0) {
+        historyArea.innerHTML = '<div class="empty">過去の履歴はまだありません</div>';
+        return;
+      }
+      const rows = attempts.slice(0, 20).map(a => {
+        const pct = Math.round((a.score / a.total) * 100);
+        // 種別表示: 卒業試験 / 単元名 / （旧データは難易度）
+        let kind;
+        if (a.is_graduation) {
+          kind = `<span class="hist-kind grad">${levelLabel(a.level)} 卒業試験</span>`;
+        } else if (a.unit) {
+          kind = escapeHtml(unitNameMap[a.unit] || a.unit);
+        } else {
+          kind = `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
+        }
+        const srcBadge = a.source === "rag"
+          ? `<span class="src-badge src-rag">RAG</span>`
+          : `<span class="src-badge src-pool">POOL</span>`;
+        return `<tr>
+          <td>${fmtDate(a.taken_at)}</td>
+          <td>${srcBadge}</td>
+          <td>${kind}</td>
+          <td>${a.score} / ${a.total}</td>
+          <td><span class="score-pill ${pillClass(pct)}">${pct}%</span></td>
+        </tr>`;
+      }).join("");
+      historyArea.innerHTML = `
+        <table class="data">
+          <thead><tr><th>受験日時</th><th>方式</th><th>種別</th><th>得点</th><th>正答率</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    init();
+  </script>
+</body>
+</html>

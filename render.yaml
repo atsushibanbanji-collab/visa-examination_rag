@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: visa-quiz-rag
+    runtime: python
+    region: singapore
+    plan: free
+    branch: main
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.5
+      - key: ADMIN_TOKEN
+        generateValue: true
+      # RAG出題に必須。未設定だと固定プール方式のみ動作し、RAGは503を返す。
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # 任意。既定は claude-haiku-4-5-20251001。
+      - key: RAG_MODEL
+        value: claude-haiku-4-5-20251001
+      # 選択肢数（3 or 4）。フロントは可変対応済み。
+      - key: RAG_CHOICES
+        value: "3"
+      # RAGセッション（生成問題の一時保持）TTL秒。既定2時間。
+      - key: RAG_SESSION_TTL_SEC
+        value: "7200"
+      # 履歴・RAGセッションを永続化したい場合は Persistent Disk をマウントし、
+      # 以下を /var/data/quiz.db のようなパスに設定する。
+      # Freeプランではディスクが揮発するため、再デプロイで履歴・セッションが消える点に注意。
+      # - key: DATABASE_PATH
+      #   value: /var/data/quiz.db
+      #
+      # ※原本PDF（backend/source/visa_guide_v22_1.pdf）はリポジトリに含めない。
+      #   RAGをPDF根拠で動かす場合は、デプロイ後に手動配置するか Persistent Disk に置く。
+      #   未配置でも観点要約（summary）を根拠に動作する。
