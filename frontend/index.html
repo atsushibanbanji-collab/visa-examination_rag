@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>ビザ検定（出題方式 比較版）</title>
+  <title>ビザ検定</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="header">
       <h1>ビザ検定</h1>
-      <p class="subtitle">出題方式 比較版（固定プール vs RAG）</p>
+      <p class="subtitle">社内向け 知識確認テスト（AI出題）</p>
     </header>
 
     <section class="card">
@@ -22,28 +22,8 @@
     </section>
 
     <section class="card">
-      <h2>出題方式を選択</h2>
-      <p class="muted">同じ単元を2方式で受験して、出題品質・難度・体感を比べられます。進捗は方式ごとに別管理です。</p>
-      <div class="mode-grid" id="mode-grid">
-        <div class="mode-card selected" data-mode="pool">
-          <div class="mode-badge mode-badge-pool">POOL</div>
-          <h3>固定プール方式</h3>
-          <div class="meta">事前作成の問題集からランダム出題。高速・安定。</div>
-        </div>
-        <div class="mode-card" data-mode="rag">
-          <div class="mode-badge mode-badge-rag">RAG</div>
-          <h3>RAG方式</h3>
-          <div class="meta">原本＋観点からAIが毎回生成。多様だが生成に数秒。</div>
-        </div>
-      </div>
-      <p class="note" id="rag-note" style="display:none;">
-        ※RAG方式は受験開始時にAIが10問生成します（数秒かかります）。
-      </p>
-    </section>
-
-    <section class="card">
       <h2>難易度を選択</h2>
-      <p class="muted">レベルを選んだ後、単元別に受験できます。</p>
+      <p class="muted">レベルを選んだ後、単元別に受験できます。出題はAIが原本に基づき毎回生成します。</p>
       <div class="level-grid" id="level-grid">
         <div class="loading">読み込み中…</div>
       </div>
@@ -59,11 +39,11 @@
     const usernameInput = document.getElementById("username");
     const levelGrid = document.getElementById("level-grid");
     const startBtn = document.getElementById("start-btn");
-    const modeGrid = document.getElementById("mode-grid");
-    const ragNote = document.getElementById("rag-note");
+
+    const LEVEL_NAMES = { beginner: "初級", intermediate: "中級", advanced: "上級" };
+    const LEVEL_ORDER = ["beginner", "intermediate", "advanced"];
 
     let selectedLevel = null;
-    let selectedMode = "pool";
     let levels = [];
 
     const savedName = localStorage.getItem("visa_quiz_username");
@@ -76,21 +56,21 @@
 
     usernameInput.addEventListener("input", refreshStart);
 
-    // 方式カードの選択
-    modeGrid.querySelectorAll(".mode-card").forEach((card) => {
-      card.addEventListener("click", () => {
-        selectedMode = card.dataset.mode;
-        modeGrid.querySelectorAll(".mode-card").forEach((el) => el.classList.remove("selected"));
-        card.classList.add("selected");
-        ragNote.style.display = selectedMode === "rag" ? "block" : "none";
-      });
-    });
-
     async function loadLevels() {
       try {
-        const res = await fetch("/api/levels");
+        // 観点メタのあるレベルから難易度を導出する
+        const res = await fetch("/api/rag/cells");
         const data = await res.json();
-        levels = data.levels;
+        const counts = {};
+        for (const c of (data.cells || [])) {
+          counts[c.level] = (counts[c.level] || 0) + 1;
+        }
+        levels = LEVEL_ORDER.map((id) => ({
+          id,
+          name: LEVEL_NAMES[id] || id,
+          available: (counts[id] || 0) > 0,
+          unit_count: counts[id] || 0,
+        }));
         renderLevels();
       } catch (e) {
         levelGrid.innerHTML = '<div class="empty">難易度情報の取得に失敗しました</div>';
@@ -104,16 +84,9 @@
         div.className = "level-card" + (lv.available ? "" : " disabled");
         div.dataset.id = lv.id;
 
-        let meta;
-        if (lv.available) {
-          const unitText = lv.unit_count > 0
-            ? `${lv.unit_count}単元 / ${lv.pool_size}問`
-            : `${lv.pool_size}問プール`;
-          meta = `<div class="meta">${unitText}</div>`;
-        } else {
-          meta = `<div class="coming-soon">COMING SOON</div>`;
-        }
-
+        const meta = lv.available
+          ? `<div class="meta">${lv.unit_count}単元</div>`
+          : `<div class="coming-soon">COMING SOON</div>`;
         div.innerHTML = `<h3>${lv.name}</h3>${meta}`;
 
         if (lv.available) {
@@ -132,7 +105,7 @@
       const name = usernameInput.value.trim();
       if (!name || !selectedLevel) return;
       localStorage.setItem("visa_quiz_username", name);
-      const params = new URLSearchParams({ user: name, level: selectedLevel, mode: selectedMode });
+      const params = new URLSearchParams({ user: name, level: selectedLevel });
       window.location.href = `/units.html?${params.toString()}`;
     });
 

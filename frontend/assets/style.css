@@ -1055,59 +1055,6 @@ code {
   background: var(--danger-bg);
 }
 
-/* === 出題方式の選択（固定プール / RAG） === */
-.mode-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-  margin-top: 16px;
-}
-.mode-card {
-  position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px 18px 16px;
-  cursor: pointer;
-  background: #fff;
-  transition: all .15s ease;
-}
-.mode-card:hover {
-  border-color: var(--primary);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow);
-}
-.mode-card.selected {
-  border-color: var(--primary);
-  background: #eef3f9;
-}
-.mode-card h3 {
-  margin: 6px 0 6px;
-  font-size: 16px;
-  color: var(--primary);
-}
-.mode-card .meta {
-  font-size: .85rem;
-  color: var(--muted);
-  line-height: 1.6;
-}
-.mode-badge {
-  display: inline-block;
-  font-size: .7rem;
-  font-weight: 700;
-  letter-spacing: .08em;
-  padding: 2px 8px;
-  border-radius: 4px;
-  color: #fff;
-}
-.mode-badge-pool { background: var(--primary); }
-.mode-badge-rag  { background: #6b4c9a; }
-
-/* 受験画面のモードラベルに RAG 色を足す */
-.quiz-mode-label.rag {
-  background: #6b4c9a;
-  color: #fff;
-}
-
 /* === RAG生成メトリクス（結果画面） === */
 .rag-metrics {
   display: grid;
@@ -1134,16 +1081,3 @@ code {
   font-weight: 700;
   color: var(--text);
 }
-
-/* 履歴の方式バッジ */
-.src-badge {
-  display: inline-block;
-  font-size: .68rem;
-  font-weight: 700;
-  letter-spacing: .06em;
-  padding: 1px 7px;
-  border-radius: 4px;
-  color: #fff;
-}
-.src-pool { background: var(--primary); }
-.src-rag  { background: #6b4c9a; }

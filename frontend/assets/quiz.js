@@ -1,15 +1,12 @@
 // ===========================
-// ビザ検定 - 受験画面ロジック（固定プール / RAG 両対応）
+// ビザ検定 - 受験画面ロジック（RAG出題）
 // ===========================
 
 (function () {
   const params = new URLSearchParams(location.search);
   const username = (params.get("user") || "").trim();
   const level = params.get("level") || "beginner";
-  const unit = params.get("unit") || ""; // "" / "<unit_id>" / "__graduation__"
-  const mode = params.get("mode") === "rag" ? "rag" : "pool";
-  const isRag = mode === "rag";
-  const isGraduation = unit === "__graduation__";
+  const unit = params.get("unit") || ""; // "<unit_id>"
 
   const loadingEl = document.getElementById("loading");
   const quizArea = document.getElementById("quiz-area");
@@ -37,21 +34,23 @@
     showError("受験者名が指定されていません。トップから開始してください。");
     return;
   }
+  if (!unit) {
+    showError("単元が指定されていません。単元一覧から選んでください。");
+    return;
+  }
 
   const levelName = { beginner: "初級", intermediate: "中級", advanced: "上級" }[level] || level;
-  const modeName = isRag ? "RAG方式" : "固定プール方式";
-  userLabel.textContent = `受験者：${username}（${levelName}・${modeName}）`;
+  userLabel.textContent = `受験者：${username}（${levelName}）`;
 
-  // 単元一覧へ戻れるようにエラー画面のリンクを差し替え（mode を保持）
-  const unitsParams = new URLSearchParams({ user: username, level, mode });
+  const unitsParams = new URLSearchParams({ user: username, level });
   errorBack.href = `/units.html?${unitsParams.toString()}`;
   const unitsUrl = `/units.html?${unitsParams.toString()}`;
 
   let questions = [];
   let answers = []; // 各問の選択。未回答は -1
-  let checked = []; // 各問の判定結果 {correct_choice, is_correct, explanation} / 未判定は null
+  let checked = []; // 各問の判定結果 / 未判定は null
   let currentIdx = 0;
-  let unitMeta = null;     // 当該単元の情報（戻り先表示用）
+  let unitMeta = null;
   let sessionId = null;    // RAG セッションID（採点・判定に必須）
   let genMetrics = null;   // RAG 生成メトリクス（結果画面で表示）
 
@@ -64,65 +63,33 @@
 
   async function loadQuestions() {
     try {
-      if (isRag) {
-        loadingEl.textContent = "AIが問題を生成中…（数秒かかります）";
-      }
+      loadingEl.textContent = "AIが問題を生成中…（数秒かかります）";
 
-      // ヘッダ用の単元名取得（方式に応じたエンドポイント）
-      if (unit && !isGraduation) {
-        try {
-          const p = new URLSearchParams({ level, user: username });
-          const endpoint = isRag ? "/api/rag/units" : "/api/units";
-          const ures = await fetch(`${endpoint}?${p.toString()}`);
-          if (ures.ok) {
-            const udata = await ures.json();
-            const found = (udata.units || []).find((x) => x.id === unit);
-            if (found) unitMeta = found;
-            renderModeLabel();
-          }
-        } catch (_) {}
-      } else if (isGraduation) {
-        unitMeta = { name: `${levelName} 卒業試験`, isGraduation: true };
-        renderModeLabel();
-      }
+      // ヘッダ用の単元名取得（失敗は致命的でない）
+      try {
+        const p = new URLSearchParams({ level, user: username });
+        const ures = await fetch(`/api/rag/units?${p.toString()}`);
+        if (ures.ok) {
+          const udata = await ures.json();
+          const found = (udata.units || []).find((x) => x.id === unit);
+          if (found) unitMeta = found;
+          renderModeLabel();
+        }
+      } catch (_) {}
 
-      let data;
-      if (isRag) {
-        // RAG: 観点サンプリング → LLM生成。セッションが返る。
-        const res = await fetch("/api/rag/quiz/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, level, unit }),
-        });
-        if (!res.ok) {
-          let detail = "";
-          try { detail = (await res.json()).detail || ""; } catch (_) {}
-          throw new Error(detail || `RAG出題の生成に失敗 (HTTP ${res.status})`);
-        }
-        data = await res.json();
-        sessionId = data.session_id;
-        genMetrics = data.gen_metrics || null;
-      } else {
-        // 固定プール: GET 出題
-        let url;
-        if (isGraduation) {
-          const p = new URLSearchParams({ level, user: username });
-          url = `/api/quiz/graduation/start?${p.toString()}`;
-        } else if (unit) {
-          const p = new URLSearchParams({ level, unit });
-          url = `/api/quiz/start?${p.toString()}`;
-        } else {
-          url = `/api/quiz/start?level=${encodeURIComponent(level)}`;
-        }
-        const res = await fetch(url);
-        if (!res.ok) {
-          let detail = "";
-          try { detail = (await res.json()).detail || ""; } catch (_) {}
-          if (res.status === 403) throw new Error(detail || "この試験はロックされています。");
-          throw new Error(detail || `出題エンドポイントから応答がない (HTTP ${res.status})`);
-        }
-        data = await res.json();
+      const res = await fetch("/api/rag/quiz/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, level, unit }),
+      });
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).detail || ""; } catch (_) {}
+        throw new Error(detail || `RAG出題の生成に失敗 (HTTP ${res.status})`);
       }
+      const data = await res.json();
+      sessionId = data.session_id;
+      genMetrics = data.gen_metrics || null;
 
       questions = data.questions || [];
       if (questions.length === 0) {
@@ -139,16 +106,8 @@
   }
 
   function renderModeLabel() {
-    if (isGraduation) {
-      modeLabelEl.textContent = "FINAL EXAM";
-      modeLabelEl.classList.add("graduation");
-      unitNameEl.textContent = `${levelName} 卒業試験`;
-    } else {
-      modeLabelEl.textContent = isRag ? "RAG" : "UNIT";
-      modeLabelEl.classList.remove("graduation");
-      modeLabelEl.classList.toggle("rag", isRag);
-      unitNameEl.textContent = unitMeta ? (unitMeta.name || "") : "";
-    }
+    modeLabelEl.textContent = "UNIT";
+    unitNameEl.textContent = unitMeta ? (unitMeta.name || "") : "";
   }
 
   function render() {
@@ -215,12 +174,10 @@
     render();
     choicesEl.className = "choices locked";
     try {
-      const body = { id: questions[currentIdx].id, choice: choiceIdx };
-      if (isRag) body.session_id = sessionId;
       const res = await fetch("/api/quiz/check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ id: questions[currentIdx].id, choice: choiceIdx, session_id: sessionId }),
       });
       if (!res.ok) {
         let detail = "";
@@ -261,11 +218,10 @@
       const payload = {
         username,
         level,
-        unit: unit || null,
-        mode,
+        unit,
+        session_id: sessionId,
         answers: questions.map((q, i) => ({ id: q.id, choice: answers[i] })),
       };
-      if (isRag) payload.session_id = sessionId;
       const res = await fetch("/api/quiz/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -277,10 +233,9 @@
         throw new Error(detail || `採点リクエストが失敗しました (HTTP ${res.status})`);
       }
       const result = await res.json();
-      // 結果画面用に生成メトリクスも添えて保存
       if (genMetrics) result.gen_metrics = genMetrics;
       sessionStorage.setItem("visa_quiz_last_result", JSON.stringify(result));
-      const p = new URLSearchParams({ user: username, level, mode });
+      const p = new URLSearchParams({ user: username, level });
       location.href = `/result.html?${p.toString()}`;
     } catch (e) {
       submitBtn.disabled = false;

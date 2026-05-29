@@ -25,14 +25,9 @@
         <h2>単元を選ぶ</h2>
         <p class="muted">
           10問満点を <strong>連続3回</strong> でクリア。1問でも外せば連続記録は0に戻る。
-          プールが10未満の単元はその全数で代用する。
+          出題はAIが原本に基づき毎回生成する。
         </p>
         <div class="unit-grid" id="unit-grid"></div>
-      </section>
-
-      <section class="card" id="graduation-section">
-        <h2>卒業試験</h2>
-        <div id="graduation-card-container"></div>
       </section>
 
       <div class="btn-row">
@@ -54,8 +49,6 @@
     const params = new URLSearchParams(location.search);
     const username = (params.get("user") || "").trim();
     const level = params.get("level") || "beginner";
-    const mode = params.get("mode") === "rag" ? "rag" : "pool";
-    const isRag = mode === "rag";
 
     const loadingEl = document.getElementById("loading");
     const contentEl = document.getElementById("content");
@@ -63,8 +56,6 @@
     const errorMsg = document.getElementById("error-message");
     const userLabel = document.getElementById("user-label");
     const unitGrid = document.getElementById("unit-grid");
-    const gradContainer = document.getElementById("graduation-card-container");
-    const gradSection = document.getElementById("graduation-section");
 
     function showError(msg) {
       loadingEl.style.display = "none";
@@ -78,8 +69,7 @@
     if (!username) {
       showError("受験者名が指定されていません。トップから開始してください。");
     } else {
-      const modeTag = isRag ? "RAG方式" : "固定プール方式";
-      userLabel.textContent = `受験者：${username}（${levelLabel(level)}・${modeTag}）`;
+      userLabel.textContent = `受験者：${username}（${levelLabel(level)}）`;
       document.getElementById("back-link").href = "/";
       load();
     }
@@ -87,18 +77,13 @@
     async function load() {
       try {
         const p = new URLSearchParams({ level, user: username });
-        const endpoint = isRag ? "/api/rag/units" : "/api/units";
-        const res = await fetch(`${endpoint}?${p.toString()}`);
+        const res = await fetch(`/api/rag/units?${p.toString()}`);
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
         const data = await res.json();
-        if (isRag) {
-          renderRag(data);
-        } else {
-          render(data);
-        }
+        render(data);
         loadingEl.style.display = "none";
         contentEl.style.display = "block";
       } catch (e) {
@@ -106,9 +91,15 @@
       }
     }
 
-    // RAG方式: 卒業試験は対象外。観点数を表示し、進捗は source='rag'。
-    function renderRag(data) {
-      gradSection.style.display = "none";
+    function fmtDateShort(iso) {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (isNaN(d)) return null;
+      const pad = n => String(n).padStart(2, "0");
+      return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())}`;
+    }
+
+    function render(data) {
       const summary = document.getElementById("progress-summary");
       const total = data.units.length;
       const cleared = data.units.filter((u) => u.cleared).length;
@@ -119,7 +110,7 @@
       summary.innerHTML = `
         <div class="summary-head">
           <span class="summary-count">${cleared} <span class="summary-slash">/</span> ${total} 単元クリア</span>
-          <span class="summary-status ready">RAG方式（AIが毎回生成）</span>
+          <span class="summary-status ready">AIが毎回出題を生成</span>
         </div>
         <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
         ${srcWarn}
@@ -159,163 +150,12 @@
         `;
         if (u.playable) {
           card.addEventListener("click", () => {
-            const p = new URLSearchParams({ user: username, level, unit: u.id, mode: "rag" });
+            const p = new URLSearchParams({ user: username, level, unit: u.id });
             location.href = `/quiz.html?${p.toString()}`;
           });
         }
         unitGrid.appendChild(card);
       }
-    }
-
-    function fmtDateShort(iso) {
-      if (!iso) return null;
-      const d = new Date(iso);
-      if (isNaN(d)) return null;
-      const pad = n => String(n).padStart(2, "0");
-      return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())}`;
-    }
-
-    function render(data) {
-      // 進捗サマリーバー
-      const grad0 = data.graduation || {};
-      const totalUnits = grad0.total_units || data.units.length;
-      const clearedUnits = grad0.cleared_units || 0;
-      const pct = totalUnits > 0 ? Math.round((clearedUnits / totalUnits) * 100) : 0;
-      const summary = document.getElementById("progress-summary");
-
-      let statusLine;
-      if (grad0.passed) {
-        statusLine = `<span class="summary-status graduated">${levelLabel(level)} 卒業済み</span>`;
-      } else if (grad0.unlocked) {
-        statusLine = `<span class="summary-status ready">卒業試験に挑戦できます</span>`;
-      } else {
-        const remain = totalUnits - clearedUnits;
-        statusLine = `<span class="summary-status">卒業まであと <strong>${remain}</strong> 単元</span>`;
-      }
-
-      summary.innerHTML = `
-        <div class="summary-head">
-          <span class="summary-count">${clearedUnits} <span class="summary-slash">/</span> ${totalUnits} 単元クリア</span>
-          ${statusLine}
-        </div>
-        <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
-      `;
-
-      // 単元カード
-      unitGrid.innerHTML = "";
-      for (const u of data.units) {
-        const card = document.createElement("div");
-        const classes = ["unit-card"];
-        if (u.cleared) classes.push("cleared");
-        if (!u.playable) classes.push("disabled");
-        card.className = classes.join(" ");
-
-        const required = u.required_streak || 3;
-        const dots = Array.from({ length: required })
-          .map((_, i) => {
-            const filled = i < u.streak_count;
-            return `<span class="streak-dot${filled ? " filled" : ""}"></span>`;
-          })
-          .join("");
-
-        const cleared_badge = u.cleared
-          ? `<span class="unit-badge cleared-badge">クリア済</span>`
-          : "";
-
-        const poolText = u.pool_size > 0
-          ? `${u.questions_per_quiz}問出題 / プール ${u.pool_size}問`
-          : "プール準備中";
-
-        const lastDate = fmtDateShort(u.last_taken_at);
-        const lastText = lastDate
-          ? `<p class="unit-last">最終受験 ${lastDate}</p>`
-          : `<p class="unit-last unit-last-none">未挑戦</p>`;
-
-        card.innerHTML = `
-          <div class="unit-card-head">
-            <h3>${escapeHtml(u.name)}</h3>
-            ${cleared_badge}
-          </div>
-          <p class="unit-meta">${poolText}</p>
-          <div class="streak-row">
-            <div class="streak-dots">${dots}</div>
-            <span class="streak-text">${u.streak_count} / ${required}</span>
-          </div>
-          ${u.best_streak > 0 && !u.cleared
-            ? `<p class="unit-best">過去最高: ${u.best_streak} 連続</p>`
-            : ""}
-          ${lastText}
-        `;
-
-        if (u.playable) {
-          card.addEventListener("click", () => {
-            const p = new URLSearchParams({ user: username, level, unit: u.id, mode: "pool" });
-            location.href = `/quiz.html?${p.toString()}`;
-          });
-        }
-        unitGrid.appendChild(card);
-      }
-
-      // 卒業試験カード
-      const grad = data.graduation;
-      const cleared = grad.cleared_units || 0;
-      const total = grad.total_units || 0;
-
-      const gradCard = document.createElement("div");
-      gradCard.className = "graduation-card";
-
-      if (grad.unlocked) {
-        gradCard.classList.add("unlocked");
-        const passedBadge = grad.passed
-          ? `<span class="unit-badge cleared-badge">合格済</span>`
-          : "";
-        gradCard.innerHTML = `
-          <div class="graduation-head">
-            <div>
-              <div class="graduation-label">FINAL EXAM</div>
-              <div class="graduation-title">${levelLabel(level)} 卒業試験</div>
-            </div>
-            ${passedBadge}
-          </div>
-          <p class="graduation-desc">
-            全${total}単元クリア達成。${grad.questions_count}問から出題、
-            <strong>${grad.pass_score}問以上正解で合格</strong>。
-          </p>
-          <div class="btn-row">
-            <button class="btn" id="grad-start">卒業試験を開始</button>
-          </div>
-        `;
-        gradCard.querySelector("#grad-start").addEventListener("click", () => {
-          const p = new URLSearchParams({ user: username, level, unit: "__graduation__", mode: "pool" });
-          location.href = `/quiz.html?${p.toString()}`;
-        });
-      } else {
-        gradCard.classList.add("locked");
-        const pct = total > 0 ? Math.round((cleared / total) * 100) : 0;
-        const remainingUnits = data.units.filter(u => !u.cleared).map(u => u.name);
-        const remainText = remainingUnits.length > 0
-          ? `<p class="graduation-remaining">残り: ${remainingUnits.map(escapeHtml).join("、")}</p>`
-          : "";
-        gradCard.innerHTML = `
-          <div class="graduation-head">
-            <div>
-              <div class="graduation-label">LOCKED</div>
-              <div class="graduation-title">卒業試験</div>
-            </div>
-            <span class="lock-icon">🔒</span>
-          </div>
-          <p class="graduation-desc">
-            全${total}単元をクリアすると解放される。
-          </p>
-          <div class="progress">
-            <div class="bar" style="width:${pct}%"></div>
-          </div>
-          <p class="muted" style="margin-top:8px;">クリア済 ${cleared} / ${total}</p>
-          ${remainText}
-        `;
-      }
-      gradContainer.innerHTML = "";
-      gradContainer.appendChild(gradCard);
     }
   </script>
 </body>

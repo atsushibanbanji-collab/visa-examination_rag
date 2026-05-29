@@ -23,25 +23,18 @@
         <div class="pct" id="pct">0%</div>
       </div>
 
-      <!-- RAG方式: 生成メトリクス（比較用） -->
+      <!-- RAG生成メトリクス -->
       <section class="card" id="rag-metrics-card" style="display:none;">
         <h2>RAG生成メトリクス</h2>
         <div class="rag-metrics" id="rag-metrics"></div>
         <p class="muted" id="rag-perspectives"></p>
       </section>
 
-      <!-- 単元クイズ用: 連続記録の更新表示 -->
+      <!-- 連続記録の更新表示 -->
       <section class="card" id="streak-banner" style="display:none;">
         <h2 id="streak-title">連続記録の更新</h2>
         <div class="streak-update" id="streak-update"></div>
         <p class="muted" id="streak-message"></p>
-      </section>
-
-      <!-- 卒業試験用: 合否表示 -->
-      <section class="card" id="graduation-banner" style="display:none;">
-        <h2 id="grad-title">卒業試験 結果</h2>
-        <div class="graduation-result" id="grad-result"></div>
-        <p class="muted" id="grad-message"></p>
       </section>
 
       <section class="card">
@@ -69,9 +62,6 @@
     const params = new URLSearchParams(location.search);
     const username = (params.get("user") || "").trim();
     const level = params.get("level") || "beginner";
-    const mode = params.get("mode") === "rag" ? "rag" : "pool";
-    const isRag = mode === "rag";
-    const unitsEndpoint = isRag ? "/api/rag/units" : "/api/units";
 
     const loadingEl = document.getElementById("loading");
     const contentEl = document.getElementById("content");
@@ -84,9 +74,6 @@
     const streakBanner = document.getElementById("streak-banner");
     const streakUpdate = document.getElementById("streak-update");
     const streakMessage = document.getElementById("streak-message");
-    const gradBanner = document.getElementById("graduation-banner");
-    const gradResult = document.getElementById("grad-result");
-    const gradMessage = document.getElementById("grad-message");
     const reviewEl = document.getElementById("review");
     const historyArea = document.getElementById("history-area");
     const retryLink = document.getElementById("retry-link");
@@ -102,40 +89,26 @@
       }
       const result = JSON.parse(raw);
       const name = result.username || username;
-      const rmode = result.mode === "rag" ? "rag" : (isRag ? "rag" : "pool");
-      const modeTag = rmode === "rag" ? "・RAG方式" : "・固定プール方式";
-      userLabel.textContent = `受験者：${name}（${levelLabel(result.level || level)}${modeTag}）`;
+      const lvl = result.level || level;
+      userLabel.textContent = `受験者：${name}（${levelLabel(lvl)}）`;
 
       scoreEl.textContent = result.score;
       totalEl.textContent = result.total;
       const pct = result.total > 0 ? Math.round((result.score / result.total) * 100) : 0;
       pctEl.textContent = `${pct}%`;
 
-      // RAG生成メトリクス
       if (result.gen_metrics) renderRagMetrics(result.gen_metrics);
 
-      // 戻り先リンク（mode を保持）
-      const unitsParams = new URLSearchParams({ user: name, level: result.level || level, mode: rmode });
+      const unitsParams = new URLSearchParams({ user: name, level: lvl });
       unitsLink.href = `/units.html?${unitsParams.toString()}`;
 
-      if (result.is_graduation) {
-        renderGraduation(result);
-        retryLink.textContent = "卒業試験をもう一度";
-        const p = new URLSearchParams({
-          user: name, level: result.level || level, unit: "__graduation__", mode: rmode,
-        });
-        retryLink.href = `/quiz.html?${p.toString()}`;
-      } else if (result.unit) {
+      if (result.unit) {
         renderUnitStreak(result);
         retryLink.textContent = "この単元をもう一度";
-        const p = new URLSearchParams({
-          user: name, level: result.level || level, unit: result.unit, mode: rmode,
-        });
+        const p = new URLSearchParams({ user: name, level: lvl, unit: result.unit });
         retryLink.href = `/quiz.html?${p.toString()}`;
-        // 次の未クリア単元への導線を用意（非同期・失敗しても致命的でない）
-        setupNextUnit(name, result.level || level, result.unit, rmode);
+        setupNextUnit(name, lvl, result.unit);
       } else {
-        // 単元なし（旧API互換ケース）。バナー類は出さない。
         retryLink.href = unitsLink.href;
       }
 
@@ -146,15 +119,13 @@
       loadHistory(name);
     }
 
-    async function setupNextUnit(name, lvl, currentUnit, rmode) {
+    async function setupNextUnit(name, lvl, currentUnit) {
       try {
         const p = new URLSearchParams({ level: lvl, user: name });
-        const res = await fetch(`${unitsEndpoint}?${p.toString()}`);
+        const res = await fetch(`/api/rag/units?${p.toString()}`);
         if (!res.ok) return;
         const data = await res.json();
         const units = data.units || [];
-        // 現在の単元より後で、まだクリアしていない単元を探す。
-        // 見つからなければ先頭から未クリアを探す（巡回）。
         const idx = units.findIndex(u => u.id === currentUnit);
         const ordered = idx >= 0
           ? units.slice(idx + 1).concat(units.slice(0, idx))
@@ -162,14 +133,12 @@
         const next = ordered.find(u => !u.cleared && u.playable);
         const nextLink = document.getElementById("next-unit-link");
         if (next) {
-          const np = new URLSearchParams({ user: name, level: lvl, unit: next.id, mode: rmode });
+          const np = new URLSearchParams({ user: name, level: lvl, unit: next.id });
           nextLink.href = `/quiz.html?${np.toString()}`;
           nextLink.textContent = `次の単元へ：${next.name} →`;
           nextLink.style.display = "inline-block";
         }
-      } catch (_) {
-        // 取得失敗時はボタンを出さないだけ
-      }
+      } catch (_) {}
     }
 
     function renderRagMetrics(m) {
@@ -203,7 +172,6 @@
 
       streakBanner.style.display = "block";
 
-      // メインの視覚: ドット表現
       const dots = Array.from({ length: required })
         .map((_, i) => {
           const filled = i < up.streak_count;
@@ -236,7 +204,7 @@
 
       let msg;
       if (newlyCleared) {
-        msg = "おめでとう。卒業試験への道がまた一歩近づいた。";
+        msg = "おめでとう。この単元をクリアした。";
       } else if (passed) {
         const remain = required - up.streak_count;
         msg = remain > 0 ? `あと連続 ${remain} 回満点でクリア。` : "クリア条件達成。";
@@ -244,25 +212,6 @@
         msg = "1問でも外すと連続記録は0に戻る仕様。立て直そう。";
       }
       streakMessage.textContent = msg;
-    }
-
-    function renderGraduation(result) {
-      const passed = result.passed;
-      const passScore = result.pass_score || 16;
-      gradBanner.style.display = "block";
-
-      if (passed) {
-        bannerLabel.textContent = "GRADUATED";
-        scoreBanner.classList.add("perfect");
-        gradResult.innerHTML = `<div class="streak-headline cleared">合格</div>`;
-        gradMessage.textContent =
-          `${result.score} / ${result.total} 正解。合格基準 ${passScore} 問を超えた。`;
-      } else {
-        bannerLabel.textContent = "FAILED";
-        gradResult.innerHTML = `<div class="streak-headline reset">不合格</div>`;
-        gradMessage.textContent =
-          `合格は ${passScore} / ${result.total} 以上。間違えた問題を復習して再挑戦しよう。`;
-      }
     }
 
     function renderReview(results) {
@@ -295,11 +244,10 @@
 
     async function loadHistory(name) {
       try {
-        // 単元ID→表示名のマップを用意（履歴表示用）。失敗しても致命的でない。
         let unitNameMap = {};
         try {
           const p = new URLSearchParams({ level, user: name });
-          const ures = await fetch(`${unitsEndpoint}?${p.toString()}`);
+          const ures = await fetch(`/api/rag/units?${p.toString()}`);
           if (ures.ok) {
             const udata = await ures.json();
             (udata.units || []).forEach(u => { unitNameMap[u.id] = u.name; });
@@ -324,21 +272,11 @@
       }
       const rows = attempts.slice(0, 20).map(a => {
         const pct = Math.round((a.score / a.total) * 100);
-        // 種別表示: 卒業試験 / 単元名 / （旧データは難易度）
-        let kind;
-        if (a.is_graduation) {
-          kind = `<span class="hist-kind grad">${levelLabel(a.level)} 卒業試験</span>`;
-        } else if (a.unit) {
-          kind = escapeHtml(unitNameMap[a.unit] || a.unit);
-        } else {
-          kind = `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
-        }
-        const srcBadge = a.source === "rag"
-          ? `<span class="src-badge src-rag">RAG</span>`
-          : `<span class="src-badge src-pool">POOL</span>`;
+        const kind = a.unit
+          ? escapeHtml(unitNameMap[a.unit] || a.unit)
+          : `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
         return `<tr>
           <td>${fmtDate(a.taken_at)}</td>
-          <td>${srcBadge}</td>
           <td>${kind}</td>
           <td>${a.score} / ${a.total}</td>
           <td><span class="score-pill ${pillClass(pct)}">${pct}%</span></td>
@@ -346,7 +284,7 @@
       }).join("");
       historyArea.innerHTML = `
         <table class="data">
-          <thead><tr><th>受験日時</th><th>方式</th><th>種別</th><th>得点</th><th>正答率</th></tr></thead>
+          <thead><tr><th>受験日時</th><th>単元</th><th>得点</th><th>正答率</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;

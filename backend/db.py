@@ -227,54 +227,6 @@ def get_user_summary():
         return [dict(r) for r in rows]
 
 
-def get_comparison_summary() -> dict:
-    """固定プール方式 vs RAG方式の比較集計を返す。
-
-    source 別に受験回数・平均正答率を集計し、RAGについては details JSON 内の
-    metrics（レイテンシ・トークン）を平均する。比較実験のダッシュボード用。
-    """
-    with get_conn() as conn:
-        agg = {}
-        base = conn.execute(
-            """
-            SELECT source,
-                   COUNT(*)                                AS attempts_count,
-                   AVG(CAST(score AS REAL) * 100 / total)  AS avg_pct
-            FROM attempts
-            GROUP BY source
-            """
-        ).fetchall()
-        for r in base:
-            agg[r["source"]] = {
-                "attempts_count": r["attempts_count"],
-                "avg_pct": round(r["avg_pct"], 1) if r["avg_pct"] is not None else None,
-                "avg_latency_ms": None,
-                "avg_input_tokens": None,
-                "avg_output_tokens": None,
-            }
-        # RAG のレイテンシ・トークンは details の metrics から平均する
-        rag_rows = conn.execute(
-            "SELECT details FROM attempts WHERE source = ?", (SOURCE_RAG,)
-        ).fetchall()
-        lat, ins, outs = [], [], []
-        for r in rag_rows:
-            m = _extract_attempt_meta(r["details"]).get("metrics") or {}
-            if m.get("latency_ms") is not None:
-                lat.append(m["latency_ms"])
-            if m.get("input_tokens") is not None:
-                ins.append(m["input_tokens"])
-            if m.get("output_tokens") is not None:
-                outs.append(m["output_tokens"])
-        if SOURCE_RAG in agg:
-            if lat:
-                agg[SOURCE_RAG]["avg_latency_ms"] = round(sum(lat) / len(lat))
-            if ins:
-                agg[SOURCE_RAG]["avg_input_tokens"] = round(sum(ins) / len(ins))
-            if outs:
-                agg[SOURCE_RAG]["avg_output_tokens"] = round(sum(outs) / len(outs))
-        return agg
-
-
 # ----------------------------------------------------------------------
 # 単元進捗
 # ----------------------------------------------------------------------

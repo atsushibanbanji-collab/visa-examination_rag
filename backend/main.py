@@ -5,24 +5,22 @@
   - 受験系ルーター（routes_quiz）と管理系ルーター（routes_admin）の登録
   - フロントの静的配信
 
-固定プール方式（questions.json）と RAG方式（perspectives + 原本）を
-同一UI・同一採点で並走させ、出題品質・難度安定性・コスト・レイテンシを比較する。
+原本PDF＋観点メタ（perspectives）から、出題のたびにLLMが問題を生成する。
 個々のエンドポイントの実装は routes_quiz.py / routes_admin.py に、
-固定プールの状態管理は questions_store.py に、RAGの観点メタは rag_perspectives.py に分離。
+RAGの観点メタは rag_perspectives.py に分離。
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend import db
-from backend import questions_store as store
 from backend import rag_perspectives
 from backend.config import FRONTEND_DIR
 from backend.routes_admin import router as admin_router
 from backend.routes_quiz import router as quiz_router
 
 # --- アプリ ---
-app = FastAPI(title="ビザ検定（RAG比較版）", description="固定プール vs RAG 比較", version="1.0.0")
+app = FastAPI(title="ビザ検定（RAG出題）", description="RAG出題によるビザ知識検定", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,7 +30,6 @@ app.add_middleware(
 )
 
 # --- 起動時の初期化 ---
-store.load()              # questions.json をメモリへ
 rag_perspectives.load()   # 観点メタ（perspectives/*.json）をメモリへ
 db.init_db()              # SQLite スキーマ初期化
 
