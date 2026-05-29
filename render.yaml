@@ -10,9 +10,11 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.5
+      # 管理画面トークン。フロントの admin-<token>.html と一致させる必要があるため、
+      # 自動生成にせずダッシュボードで管理する（現状 admin-Kp7vQm2xRt.html に対応）。
       - key: ADMIN_TOKEN
-        generateValue: true
-      # RAG出題に必須。未設定だと固定プール方式のみ動作し、RAGは503を返す。
+        sync: false
+      # RAG出題に必須。未設定だと出題開始時に503を返す。
       - key: ANTHROPIC_API_KEY
         sync: false
       # 任意。既定は claude-haiku-4-5-20251001。

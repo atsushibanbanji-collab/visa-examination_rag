@@ -3,9 +3,9 @@
 // ===========================
 
 (function () {
-  // URLのファイル名からトークンを推定（admin-x7k2a9.html → x7k2a9）
+  // URLのファイル名からトークンを推定（admin-Kp7vQm2xRt.html → Kp7vQm2xRt）
   function detectAdminToken() {
-    const path = location.pathname; // e.g. /admin-x7k2a9.html
+    const path = location.pathname; // e.g. /admin-Kp7vQm2xRt.html
     const m = path.match(/admin-([a-zA-Z0-9_-]+)\.html$/);
     return m ? m[1] : "";
   }

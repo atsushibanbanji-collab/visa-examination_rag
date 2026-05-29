@@ -40,7 +40,7 @@ frontend/
   units.html           単元選択
   quiz.html            受験画面
   result.html          結果＋RAG生成メトリクス＋履歴
-  admin-x7k2a9.html    管理画面
+  admin-Kp7vQm2xRt.html 管理画面（ファイル名＝ADMIN_TOKEN）
   assets/              style.css, quiz.js, admin.js, common.js
 docs/rag/              実装指示書（IMPLEMENTATION_SPEC.md 等）
 ```
@@ -60,7 +60,7 @@ uvicorn backend.main:app --reload --port 8000
 ```
 
 - 受験画面: `http://localhost:8000/`
-- 管理画面: `http://localhost:8000/admin-x7k2a9.html`
+- 管理画面: `http://localhost:8000/admin-Kp7vQm2xRt.html`（ファイル名が ADMIN_TOKEN と一致している必要がある）
 
 `ANTHROPIC_API_KEY` 未設定だと出題開始時に 503 を返す。
 
@@ -83,7 +83,7 @@ PDF未配置でも、観点メタの `summary`（原本に基づく事実要約�
 | `RAG_CHOICES` | 3 | 選択肢数（3 or 4） |
 | `RAG_QUESTIONS_PER_QUIZ` | 10 | 1回の出題数 |
 | `RAG_SESSION_TTL_SEC` | 7200 | セッション保持秒 |
-| `ADMIN_TOKEN` | x7k2a9 | 管理画面トークン |
+| `ADMIN_TOKEN` | Kp7vQm2xRt | 管理画面トークン（`admin-<token>.html` と一致必須） |
 | `DATABASE_PATH` | backend/quiz.db | DBパス |
 
 ## API

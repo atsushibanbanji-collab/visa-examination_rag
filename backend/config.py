@@ -15,7 +15,7 @@ SOURCE_DIR = Path(__file__).parent / "source"
 ALLOWED_LEVELS = ("beginner", "intermediate", "advanced")
 
 # --- 管理者トークン（URL難読化のみ。環境変数で差し替え可能）---
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "x7k2a9")
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "Kp7vQm2xRt")
 
 # --- 出題・採点のルール ---
 UNIT_CLEAR_REQUIRED_STREAK = 3      # 単元クリアに必要な連続満点回数
