@@ -97,6 +97,10 @@
       const pct = result.total > 0 ? Math.round((result.score / result.total) * 100) : 0;
       pctEl.textContent = `${pct}%`;
 
+      if (result.test) {
+        userLabel.textContent += "｜テストモード（履歴・進捗には記録されません）";
+      }
+
       if (result.gen_metrics) renderRagMetrics(result.gen_metrics);
 
       const unitsParams = new URLSearchParams({ user: name, level: lvl });
@@ -220,22 +224,35 @@
         const item = document.createElement("div");
         item.className = "review-item " + (r.is_correct ? "correct" : "wrong");
 
-        const choiceLines = r.choices.map((c, i) => {
-          let cls = "";
-          if (i === r.correct_choice && i === r.user_choice) cls = "user-correct";
-          else if (i === r.user_choice && !r.is_correct) cls = "user-wrong";
-          else if (i === r.correct_choice) cls = "correct-marker";
-          const marker = String.fromCharCode(0x2160 + i);
-          let suffix = "";
-          if (i === r.user_choice) suffix += " ←あなたの回答";
-          if (i === r.correct_choice && i !== r.user_choice) suffix += " ←正解";
-          return `<div class="choice-line ${cls}">${marker}. ${escapeHtml(c)}${suffix}</div>`;
-        }).join("");
+        let body = "";
+        if (r.type === "fill_in") {
+          // 穴埋め: あなたの回答と正解例を並べる（選択肢は無い）
+          const yours = Array.isArray(r.user_text_answers) ? r.user_text_answers : [];
+          const corr = Array.isArray(r.correct_answers) ? r.correct_answers : [];
+          const yourLine = `<div class="choice-line ${r.is_correct ? "user-correct" : "user-wrong"}">あなたの回答: ${escapeHtml(yours.join(" / ") || "（未回答）")}</div>`;
+          const corrLine = corr.length
+            ? `<div class="choice-line correct-marker">正解例: ${escapeHtml(corr.join(" / "))}</div>`
+            : "";
+          body = yourLine + corrLine;
+        } else {
+          // 選択式（初級Yes/No・中級）
+          body = (r.choices || []).map((c, i) => {
+            let cls = "";
+            if (i === r.correct_choice && i === r.user_choice) cls = "user-correct";
+            else if (i === r.user_choice && !r.is_correct) cls = "user-wrong";
+            else if (i === r.correct_choice) cls = "correct-marker";
+            const marker = String.fromCharCode(0x2160 + i);
+            let suffix = "";
+            if (i === r.user_choice) suffix += " ←あなたの回答";
+            if (i === r.correct_choice && i !== r.user_choice) suffix += " ←正解";
+            return `<div class="choice-line ${cls}">${marker}. ${escapeHtml(c)}${suffix}</div>`;
+          }).join("");
+        }
 
         item.innerHTML = `
           <span class="badge">${r.is_correct ? "正答" : "誤答"}</span>
           <p class="q">問${idx + 1}. ${escapeHtml(r.question)}</p>
-          ${choiceLines}
+          ${body}
           ${r.explanation ? `<div class="explanation">${escapeHtml(r.explanation)}</div>` : ""}
         `;
         reviewEl.appendChild(item);

@@ -98,6 +98,13 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_quiz_sessions_expires "
             "ON quiz_sessions(expires_at)"
         )
+        # ヘッド／テイル分割用: テイル（残り問題）の未消化観点を保持する列。
+        # 既存DBにも安全に列を足す（無ければ追加、あれば何もしない）。
+        existing_cols = {
+            r[1] for r in cur.execute("PRAGMA table_info(quiz_sessions)").fetchall()
+        }
+        if "pending" not in existing_cols:
+            cur.execute("ALTER TABLE quiz_sessions ADD COLUMN pending TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -350,16 +357,21 @@ def save_quiz_session(
     questions: List[dict],
     meta: dict,
     ttl_sec: int,
+    pending: Optional[dict] = None,
 ) -> None:
-    """生成済みの問題（正答・解説込み）を session 単位で保存する。"""
+    """生成済みの問題（正答・解説込み）を session 単位で保存する。
+
+    pending: テイル（残り問題）の未消化観点など。ヘッド／テイル分割時に持たせ、
+             テイル生成後は None でクリアする。一括生成時は None。
+    """
     now = datetime.utcnow()
     expires = now + timedelta(seconds=ttl_sec)
     with get_conn() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO quiz_sessions
-              (session_id, username, level, unit_id, created_at, expires_at, questions, meta)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              (session_id, username, level, unit_id, created_at, expires_at, questions, meta, pending)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -370,6 +382,33 @@ def save_quiz_session(
                 expires.isoformat(timespec="seconds") + "Z",
                 json.dumps(questions, ensure_ascii=False),
                 json.dumps(meta, ensure_ascii=False),
+                json.dumps(pending, ensure_ascii=False) if pending is not None else None,
+            ),
+        )
+
+
+def update_quiz_session_questions(
+    session_id: str,
+    questions: List[dict],
+    meta: dict,
+    pending: Optional[dict] = None,
+) -> None:
+    """既存セッションに問題を追記する（テイル生成後）。
+
+    created_at / expires_at は保持し、questions・meta・pending のみ差し替える。
+    """
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE quiz_sessions
+               SET questions = ?, meta = ?, pending = ?
+             WHERE session_id = ?
+            """,
+            (
+                json.dumps(questions, ensure_ascii=False),
+                json.dumps(meta, ensure_ascii=False),
+                json.dumps(pending, ensure_ascii=False) if pending is not None else None,
+                session_id,
             ),
         )
 
@@ -389,6 +428,7 @@ def get_quiz_session(session_id: str) -> Optional[dict]:
             return None
         d["questions"] = json.loads(d["questions"])
         d["meta"] = json.loads(d["meta"]) if d["meta"] else {}
+        d["pending"] = json.loads(d["pending"]) if d.get("pending") else None
         return d
 
 

@@ -44,3 +44,9 @@ python -m venv .venv && .venv/Scripts/python -m pip install -r backend/requireme
 - RAG方式に卒業試験は無い（単元出題のみ）。
 - ハルシネーション対策の2パス検証（`RAG_VERIFY_PASS`）は枠のみ・既定off。
 - Render Free はディスク揮発 → 再デプロイで履歴・RAGセッションが消える（Persistent Disk推奨）。
+
+## 成果物の命名規約
+
+- 配布物（ZIP等）は `YYYYMMDD_<project>_<通し番号2桁>.zip` で命名する。
+  - 内容を表す語は入れず、**通し番号**で版を管理する（番号が大きいほど新しい＝最新版が一目で分かる）。
+  - 例：`20260604_visa-examination_rag_01.zip`

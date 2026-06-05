@@ -48,6 +48,13 @@ a { color: var(--primary); }
   max-width: 1100px;
 }
 
+/* 受験画面用: 本文幅をウィンドウサイズに応じて可変にする（幅まわりのみの調整）。
+   両サイドの余白を詰め、回答後の「次へ」ボタンをスクロールなしで見える範囲に収めるのが狙い。
+   読みやすさのため上限は 1100px でキャップする。 */
+.app-shell--quiz {
+  max-width: min(1100px, 94vw);
+}
+
 .header {
   display: flex;
   align-items: baseline;
@@ -971,6 +978,17 @@ code {
 /* === 即時正誤判定（回答直後フィードバック） === */
 .choices.locked .choice { cursor: default; }
 .choices.locked .choice:hover { border-color: var(--border); }
+
+/* 穴埋め（上級）の入力UI。input[type=text] の既存スタイルを流用する。 */
+.fill-in { margin: 8px 0 0; }
+.fill-in-blank { margin: 0 0 12px; }
+.fill-in-blank label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+.fill-in-submit { margin-top: 4px; }
 
 .choice.correct {
   border-color: var(--success);

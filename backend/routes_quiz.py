@@ -20,11 +20,14 @@ from backend import db
 from backend import rag_generator, rag_perspectives, rag_session_store, rag_source
 from backend.config import (
     ALLOWED_LEVELS,
+    RAG_HEAD_COUNT,
     RAG_QUESTIONS_PER_QUIZ,
+    RAG_TEST_QUESTIONS,
     UNIT_CLEAR_REQUIRED_STREAK,
+    VISA_TYPE_UNITS,
 )
 from backend.db import SOURCE_RAG
-from backend.models import CheckRequest, RagStartRequest, SubmitRequest
+from backend.models import CheckRequest, RagContinueRequest, RagStartRequest, SubmitRequest
 
 router = APIRouter()
 
@@ -32,11 +35,28 @@ router = APIRouter()
 # ----------------------------------------------------------------------
 # RAG 出題
 # ----------------------------------------------------------------------
+def _offered_cells():
+    """出題対象（ビザ種別）の単元セルだけを返す。
+
+    永住権・ビザの基本など、VISA_TYPE_UNITS に含まれない単元は除外する。
+    cells / units / start すべてここを通すことで、絞り込みの真実源を1つにする。
+    """
+    return [
+        c
+        for c in rag_perspectives.available_cells()
+        if c["unit_id"] in VISA_TYPE_UNITS
+    ]
+
+
 @router.get("/api/rag/cells")
 def rag_cells():
-    """観点メタが用意されているセル一覧と、原本テキストの利用可否を返す。"""
+    """観点メタが用意されているセル一覧と、原本テキストの利用可否を返す。
+
+    出題対象（ビザ種別）の単元のみを返す。これにより index 側の難易度導出も
+    出題対象のある難易度だけが有効になる。
+    """
     return {
-        "cells": rag_perspectives.available_cells(),
+        "cells": _offered_cells(),
         "source_available": rag_source.is_available(),
         "source_error": rag_source.load_error(),
         "questions_per_quiz": RAG_QUESTIONS_PER_QUIZ,
@@ -55,9 +75,9 @@ def rag_units(
     if not username:
         raise HTTPException(400, "user が空です。")
 
-    cells = [c for c in rag_perspectives.available_cells() if c["level"] == level]
+    cells = [c for c in _offered_cells() if c["level"] == level]
     if not cells:
-        raise HTTPException(404, f"このレベルには観点メタがありません: {level}")
+        raise HTTPException(404, f"このレベルには出題対象の単元がありません: {level}")
 
     progress_map = db.get_progress_map_for_user(username, level, source=SOURCE_RAG)
     units_out = []
@@ -90,20 +110,40 @@ def rag_units(
 
 @router.post("/api/rag/quiz/start")
 def rag_quiz_start(req: RagStartRequest):
-    """RAG出題: 観点サンプリング → LLM生成 → セッション保存 → 出題（正答は伏せる）。"""
+    """RAG出題（ヘッド）: 観点サンプリング → 先頭 RAG_HEAD_COUNT 問だけ生成して即返す。
+
+    残り（テイル）は未消化観点としてセッションに保持し、/api/rag/quiz/continue で
+    生成・追記する。開始時の体感待ちを縮めるためのヘッド／テイル分割。
+    """
     if req.level not in ALLOWED_LEVELS:
         raise HTTPException(400, f"level は {','.join(ALLOWED_LEVELS)} のいずれか。")
     username = req.username.strip()
     if not username:
         raise HTTPException(400, "user が空です。")
+    if req.unit not in VISA_TYPE_UNITS:
+        # 出題対象外（永住権・ビザの基本など）。URL直打ち等での到達を塞ぐ。
+        # データは保持しているが、当面は出題しない。
+        raise HTTPException(404, f"出題対象外の単元です: {req.unit}")
     if rag_perspectives.get_meta(req.level, req.unit) is None:
         raise HTTPException(404, f"観点メタがありません: level={req.level}, unit={req.unit}")
 
+    # 観点は最初に全数サンプリング（LLM不要）。ヘッド／テイルに分割する。
+    # テストモードでは出題数を絞り、原本非参照のダミーを生成する（経路は本番同一）。
+    total_n = RAG_TEST_QUESTIONS if req.test else RAG_QUESTIONS_PER_QUIZ
+    perspectives, seed = rag_perspectives.sample_perspectives(
+        req.level, req.unit, total_n
+    )
+    if not perspectives:
+        raise HTTPException(502, f"観点が0件です: level={req.level}, unit={req.unit}")
+    head = perspectives[:RAG_HEAD_COUNT]
+    tail = perspectives[RAG_HEAD_COUNT:]
+
     try:
-        gen = rag_generator.generate(req.level, req.unit, RAG_QUESTIONS_PER_QUIZ)
+        gen = rag_generator.generate_questions(
+            req.level, req.unit, head, seed=seed, test_mode=req.test
+        )
     except rag_generator.RAGGenerationError as e:
         msg = str(e)
-        # API未設定はサービス未構成として 503、それ以外は生成失敗として 502
         if "ANTHROPIC_API_KEY" in msg:
             raise HTTPException(503, msg)
         raise HTTPException(502, f"RAG出題の生成に失敗しました: {msg}")
@@ -114,13 +154,59 @@ def rag_quiz_start(req: RagStartRequest):
         unit_id=req.unit,
         questions=gen["questions"],
         metrics=gen["metrics"],
+        pending_perspectives=tail,
     )
     return {
         "level": req.level,
         "unit": req.unit,
         "session_id": session["session_id"],
         "questions": session["questions"],
+        "total_questions": len(perspectives),
+        "head_count": len(head),
+        "pending_count": len(tail),
+        "test": req.test,
         "gen_metrics": gen["metrics"],
+    }
+
+
+@router.post("/api/rag/quiz/continue")
+def rag_quiz_continue(req: RagContinueRequest):
+    """RAG出題（テイル）: セッションの未消化観点から残り問題を生成・追記する。
+
+    ユーザーがヘッドを解いている間に裏で呼ばれる想定。pending が空なら何もしない。
+    """
+    if not req.session_id:
+        raise HTTPException(400, "session_id が必要です。")
+    session = rag_session_store.get_session(req.session_id)
+    if session is None:
+        raise HTTPException(404, "セッションが見つからない、または期限切れです。")
+
+    pending = session.get("pending") or {}
+    pend_perspectives = pending.get("perspectives") or []
+    if not pend_perspectives:
+        # 既に消化済み or テイル無し。冪等に空を返す。
+        return {
+            "session_id": req.session_id,
+            "questions": [],
+            "gen_metrics": session.get("meta", {}),
+        }
+
+    try:
+        gen = rag_generator.generate_questions(
+            session["level"], session["unit_id"], pend_perspectives
+        )
+    except rag_generator.RAGGenerationError as e:
+        msg = str(e)
+        if "ANTHROPIC_API_KEY" in msg:
+            raise HTTPException(503, msg)
+        raise HTTPException(502, f"RAG出題（残り）の生成に失敗しました: {msg}")
+
+    merged = rag_generator.merge_metrics(session.get("meta", {}), gen["metrics"])
+    public = rag_session_store.append_tail_questions(session, gen["questions"], merged)
+    return {
+        "session_id": req.session_id,
+        "questions": public,
+        "gen_metrics": merged,
     }
 
 
@@ -141,11 +227,15 @@ def check_answer(req: CheckRequest):
     q = rag_session_store.question_in_session(session, req.id)
     if q is None:
         raise HTTPException(404, f"問題が見つからない: id={req.id}")
-    is_correct = req.choice == q["answer"]
+    graded = rag_session_store.grade_answer(
+        q, choice=req.choice, text_answers=req.text_answers
+    )
     return {
         "id": q["id"],
-        "correct_choice": q["answer"],
-        "is_correct": is_correct,
+        "type": graded["type"],
+        "correct_choice": graded["correct_choice"],
+        "correct_answers": graded["correct_answers"],
+        "is_correct": graded["is_correct"],
         "explanation": q.get("explanation", ""),
     }
 
@@ -173,19 +263,24 @@ def submit_quiz(req: SubmitRequest):
         q = qlookup.get(ans.id)
         if q is None:
             continue
-        is_correct = ans.choice == q["answer"]
-        if is_correct:
+        graded = rag_session_store.grade_answer(
+            q, choice=ans.choice, text_answers=ans.text_answers
+        )
+        if graded["is_correct"]:
             score += 1
         results.append(
             {
                 "id": q["id"],
                 "category": q.get("perspective_id"),
                 "unit": q.get("unit", req.unit or ""),
+                "type": graded["type"],
                 "question": q["question"],
-                "choices": q["choices"],
+                "choices": q.get("choices"),
                 "user_choice": ans.choice,
-                "correct_choice": q["answer"],
-                "is_correct": is_correct,
+                "user_text_answers": ans.text_answers,
+                "correct_choice": graded["correct_choice"],
+                "correct_answers": graded["correct_answers"],
+                "is_correct": graded["is_correct"],
                 "explanation": q.get("explanation", ""),
             }
         )
@@ -193,6 +288,23 @@ def submit_quiz(req: SubmitRequest):
     total = len(results)
     if total == 0:
         raise HTTPException(400, "有効な解答がない")
+
+    # テストモードのセッションは記録しない（履歴・進捗を汚さない）。
+    is_test = bool(session_meta.get("test"))
+    if is_test:
+        return {
+            "attempt_id": None,
+            "username": username,
+            "level": req.level,
+            "unit": req.unit,
+            "score": score,
+            "total": total,
+            "passed": score == total,
+            "required_streak": UNIT_CLEAR_REQUIRED_STREAK,
+            "unit_progress": None,
+            "test": True,
+            "results": results,
+        }
 
     # 履歴を保存。単元情報・生成メタは details JSON 内の meta に格納する。
     details_payload = json.dumps(
@@ -204,7 +316,13 @@ def submit_quiz(req: SubmitRequest):
                 "metrics": session_meta,
             },
             "answers": [
-                {"id": r["id"], "user_choice": r["user_choice"], "is_correct": r["is_correct"]}
+                {
+                    "id": r["id"],
+                    "type": r["type"],
+                    "user_choice": r["user_choice"],
+                    "user_text_answers": r["user_text_answers"],
+                    "is_correct": r["is_correct"],
+                }
                 for r in results
             ],
         },
