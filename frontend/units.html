@@ -24,7 +24,7 @@
       <section class="card">
         <h2>単元を選ぶ</h2>
         <p class="muted">
-          10問満点を <strong>連続3回</strong> でクリア。1問でも外せば連続記録は0に戻る。
+          10問満点を <strong>通算3回</strong> でクリア。満点を取った回数を通算で数え、外しても減らない。
           出題はAIが原本に基づき毎回生成する。
         </p>
         <div class="unit-grid" id="unit-grid"></div>
@@ -125,8 +125,9 @@
         card.className = classes.join(" ");
 
         const required = u.required_streak || 3;
+        const perfectCount = u.perfect_count != null ? u.perfect_count : 0;
         const dots = Array.from({ length: required })
-          .map((_, i) => `<span class="streak-dot${i < u.streak_count ? " filled" : ""}"></span>`)
+          .map((_, i) => `<span class="streak-dot${i < perfectCount ? " filled" : ""}"></span>`)
           .join("");
         const cleared_badge = u.cleared
           ? `<span class="unit-badge cleared-badge">クリア済</span>` : "";
@@ -143,9 +144,8 @@
           <p class="unit-meta">${u.questions_per_quiz}問生成 / 観点 ${u.perspective_count}件</p>
           <div class="streak-row">
             <div class="streak-dots">${dots}</div>
-            <span class="streak-text">${u.streak_count} / ${required}</span>
+            <span class="streak-text">通算満点 ${perfectCount} / ${required}</span>
           </div>
-          ${u.best_streak > 0 && !u.cleared ? `<p class="unit-best">過去最高: ${u.best_streak} 連続</p>` : ""}
           ${lastText}
         `;
         if (u.playable) {

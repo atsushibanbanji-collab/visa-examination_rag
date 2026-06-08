@@ -77,6 +77,16 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_unit_progress_user_level "
             "ON unit_progress(username, level, source)"
         )
+        # 累計クリア方式用: 通算満点回数。満点を取った回数を通算で数え（外しても減らさない）、
+        # この値が閾値（既定3）に達するとそつぎょう（graduated_at 記録）。
+        # 既存DBにも安全に列を足す（無ければ追加、あれば何もしない）。
+        up_cols = {
+            r[1] for r in cur.execute("PRAGMA table_info(unit_progress)").fetchall()
+        }
+        if "perfect_count" not in up_cols:
+            cur.execute(
+                "ALTER TABLE unit_progress ADD COLUMN perfect_count INTEGER NOT NULL DEFAULT 0"
+            )
 
         # RAGの一時問題プール。生成した問題（正答・解説込み）を session 単位で保持。
         # フロントへは正答・解説を返さず、採点時にこのテーブルから引く。
@@ -98,6 +108,13 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_quiz_sessions_expires "
             "ON quiz_sessions(expires_at)"
         )
+        # ヘッド／テイル分割用: テイル（残り問題）の未消化観点を保持する列。
+        # 既存DBにも安全に列を足す（無ければ追加、あれば何もしない）。
+        existing_cols = {
+            r[1] for r in cur.execute("PRAGMA table_info(quiz_sessions)").fetchall()
+        }
+        if "pending" not in existing_cols:
+            cur.execute("ALTER TABLE quiz_sessions ADD COLUMN pending TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -189,40 +206,22 @@ def get_history_for_user(username: str, limit: int = 50):
         return out
 
 
-def get_all_attempts(limit: int = 1000):
+def get_all_unit_progress(source: str = SOURCE_POOL):
+    """全ユーザーの単元進捗を返す（管理画面の受験者一覧用）。
+
+    指定 source（既定は比較用に分離している 'pool' / 'rag'）の進捗行を、
+    受験者名でまとめやすいよう username 昇順で返す。
+    """
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT id, username, level, source, score, total, taken_at, details
-            FROM attempts
-            ORDER BY taken_at DESC, id DESC
-            LIMIT ?
+            SELECT username, level, unit_id, perfect_count, streak_count,
+                   best_streak, last_taken_at, graduated_at
+            FROM unit_progress
+            WHERE source = ?
+            ORDER BY username ASC
             """,
-            (limit,),
-        ).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            meta = _extract_attempt_meta(d.pop("details", None))
-            d.update(meta)
-            out.append(d)
-        return out
-
-
-def get_user_summary():
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                username,
-                COUNT(*) AS attempts_count,
-                MAX(CAST(score AS REAL) * 100 / total)  AS best_pct,
-                AVG(CAST(score AS REAL) * 100 / total)  AS avg_pct,
-                MAX(taken_at)                           AS last_taken_at
-            FROM attempts
-            GROUP BY username
-            ORDER BY last_taken_at DESC
-            """
+            (source,),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -237,7 +236,7 @@ def get_unit_progress(
     with get_conn() as conn:
         row = conn.execute(
             """
-            SELECT streak_count, best_streak, last_taken_at, graduated_at
+            SELECT perfect_count, streak_count, best_streak, last_taken_at, graduated_at
             FROM unit_progress
             WHERE username = ? AND level = ? AND unit_id = ? AND source = ?
             """,
@@ -253,7 +252,7 @@ def get_progress_map_for_user(
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT unit_id, streak_count, best_streak, last_taken_at, graduated_at
+            SELECT unit_id, perfect_count, streak_count, best_streak, last_taken_at, graduated_at
             FROM unit_progress
             WHERE username = ? AND level = ? AND source = ?
             """,
@@ -270,17 +269,20 @@ def update_unit_progress(
     clear_streak_required: int = 3,
     source: str = SOURCE_POOL,
 ) -> dict:
-    """満点なら streak+1、非満点なら 0 にリセット。
+    """累計方式の進捗更新。満点なら通算満点回数 perfect_count を +1（非満点でも減らさない）。
+
+    通算満点回数が clear_streak_required に達した時点で、その単元をそつぎょうとみなす
+    （graduated_at を初記録）。streak_count は「現在の連続満点数」を情報として保持する
+    （満点で+1、非満点で0リセット）が、そつぎょう判定には用いない。
 
     Args:
-        clear_streak_required: クリア（graduated_at 初記録）に必要な連続成功回数。
-            通常単元は 3、卒業試験は 1。
+        clear_streak_required: そつぎょうに必要な通算満点回数（通常単元は3）。
         source: 'pool' / 'rag'。方式ごとに進捗を独立管理する。
 
     Returns:
-        更新後の進捗 dict（streak_count, best_streak, last_taken_at,
+        更新後の進捗 dict（perfect_count, streak_count, best_streak, last_taken_at,
         graduated_at, newly_cleared）。
-        newly_cleared は今回のサブミットで初めてクリア条件に達したかどうか。
+        newly_cleared は今回のサブミットで初めてそつぎょう条件に達したかどうか。
     """
     now = _now_iso()
 
@@ -289,48 +291,54 @@ def update_unit_progress(
         conn.execute(
             """
             INSERT OR IGNORE INTO unit_progress
-              (username, level, unit_id, source, streak_count, best_streak, last_taken_at)
-            VALUES (?, ?, ?, ?, 0, 0, NULL)
+              (username, level, unit_id, source, perfect_count, streak_count, best_streak, last_taken_at)
+            VALUES (?, ?, ?, ?, 0, 0, 0, NULL)
             """,
             (username, level, unit_id, source),
         )
 
         row = conn.execute(
             """
-            SELECT streak_count, best_streak, graduated_at
+            SELECT perfect_count, streak_count, best_streak, graduated_at
             FROM unit_progress
             WHERE username = ? AND level = ? AND unit_id = ? AND source = ?
             """,
             (username, level, unit_id, source),
         ).fetchone()
 
+        prev_perfect = row["perfect_count"]
         prev_streak = row["streak_count"]
         best_streak = row["best_streak"]
         graduated_at = row["graduated_at"]
 
+        # 累計: 満点で +1、外しても据え置き（減らさない）
+        new_perfect = prev_perfect + 1 if perfect else prev_perfect
+        # 連続: 情報用に保持（満点で+1、非満点で0）
         new_streak = prev_streak + 1 if perfect else 0
         if new_streak > best_streak:
             best_streak = new_streak
 
-        # 初クリア判定: 今回 streak が閾値に達し、過去に卒業記録が無い
+        # 初そつぎょう判定: 通算満点が閾値に達し、過去にそつぎょう記録が無い
         newly_cleared = False
-        if perfect and new_streak >= clear_streak_required and graduated_at is None:
+        if new_perfect >= clear_streak_required and graduated_at is None:
             graduated_at = now
             newly_cleared = True
 
         conn.execute(
             """
             UPDATE unit_progress
-            SET streak_count  = ?,
+            SET perfect_count = ?,
+                streak_count  = ?,
                 best_streak   = ?,
                 last_taken_at = ?,
                 graduated_at  = ?
             WHERE username = ? AND level = ? AND unit_id = ? AND source = ?
             """,
-            (new_streak, best_streak, now, graduated_at, username, level, unit_id, source),
+            (new_perfect, new_streak, best_streak, now, graduated_at, username, level, unit_id, source),
         )
 
         return {
+            "perfect_count": new_perfect,
             "streak_count": new_streak,
             "best_streak": best_streak,
             "last_taken_at": now,
@@ -350,16 +358,21 @@ def save_quiz_session(
     questions: List[dict],
     meta: dict,
     ttl_sec: int,
+    pending: Optional[dict] = None,
 ) -> None:
-    """生成済みの問題（正答・解説込み）を session 単位で保存する。"""
+    """生成済みの問題（正答・解説込み）を session 単位で保存する。
+
+    pending: テイル（残り問題）の未消化観点など。ヘッド／テイル分割時に持たせ、
+             テイル生成後は None でクリアする。一括生成時は None。
+    """
     now = datetime.utcnow()
     expires = now + timedelta(seconds=ttl_sec)
     with get_conn() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO quiz_sessions
-              (session_id, username, level, unit_id, created_at, expires_at, questions, meta)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              (session_id, username, level, unit_id, created_at, expires_at, questions, meta, pending)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -370,6 +383,33 @@ def save_quiz_session(
                 expires.isoformat(timespec="seconds") + "Z",
                 json.dumps(questions, ensure_ascii=False),
                 json.dumps(meta, ensure_ascii=False),
+                json.dumps(pending, ensure_ascii=False) if pending is not None else None,
+            ),
+        )
+
+
+def update_quiz_session_questions(
+    session_id: str,
+    questions: List[dict],
+    meta: dict,
+    pending: Optional[dict] = None,
+) -> None:
+    """既存セッションに問題を追記する（テイル生成後）。
+
+    created_at / expires_at は保持し、questions・meta・pending のみ差し替える。
+    """
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE quiz_sessions
+               SET questions = ?, meta = ?, pending = ?
+             WHERE session_id = ?
+            """,
+            (
+                json.dumps(questions, ensure_ascii=False),
+                json.dumps(meta, ensure_ascii=False),
+                json.dumps(pending, ensure_ascii=False) if pending is not None else None,
+                session_id,
             ),
         )
 
@@ -389,6 +429,7 @@ def get_quiz_session(session_id: str) -> Optional[dict]:
             return None
         d["questions"] = json.loads(d["questions"])
         d["meta"] = json.loads(d["meta"]) if d["meta"] else {}
+        d["pending"] = json.loads(d["pending"]) if d.get("pending") else None
         return d
 
 

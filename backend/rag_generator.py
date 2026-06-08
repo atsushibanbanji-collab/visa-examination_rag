@@ -13,9 +13,11 @@ from typing import Callable, List, Optional, Tuple
 from backend import rag_perspectives, rag_source
 from backend.config import (
     ANTHROPIC_API_KEY,
+    QUESTION_FORMAT_BY_LEVEL,
     RAG_CHOICES,
     RAG_MAX_TOKENS,
     RAG_MODEL,
+    YESNO_CHOICES,
 )
 
 # LLM呼び出しの戻り値: (本文テキスト, usage: {"input_tokens": int, "output_tokens": int})
@@ -23,13 +25,17 @@ LLMCall = Callable[[list, str], Tuple[str, dict]]
 
 _SYSTEM_INSTRUCTIONS = (
     "あなたは米国ビザ実務の検定問題を作成する専門家。"
-    "以下の「原本」と「観点」に明記された内容のみに基づき、選択式問題を作成する。"
+    "以下の「原本」と「観点」に明記された内容のみに基づき問題を作成する。"
     "原本・観点にない事実・数値・条文を創作してはならない。"
     "難度は指定レベルに厳密に合わせる。"
-    "設問文の語尾は「〜として正しいものはどれか。」等で統一する。"
     "解説は根拠を1〜2文で簡潔に述べる。"
     "出力は指定のJSONのみ。前後の説明文やMarkdownのコードフェンスを一切付けない。"
 )
+
+
+def _format_for_level(level: str) -> str:
+    """レベル→出題形式（yesno / choice / fill_in）。未知レベルは choice。"""
+    return QUESTION_FORMAT_BY_LEVEL.get(level, "choice")
 
 
 class RAGGenerationError(Exception):
@@ -41,14 +47,25 @@ def _build_user_prompt(
     unit_name: str,
     level_description: str,
     perspectives: List[dict],
+    fmt: str,
     n_choices: int,
+    test_mode: bool = False,
 ) -> str:
-    """LLMへ渡すユーザープロンプトを組み立てる。
+    """LLMへ渡すユーザープロンプトを組み立てる（出題形式 fmt で出力スキーマを切替）。
 
     原本テキストはキャッシュ効率のため system 側（キャッシュ対象ブロック）に置き、
     ここには難度・単元・観点・出力形式だけを入れる。
+    test_mode のときは知識ベースを参照させず、形式確認用のダミー指示にする。
     """
     lines: List[str] = []
+    if test_mode:
+        lines.append(
+            "# テストモード\n"
+            "これは動作確認用のテストモードである。知識ベースを参照せず、"
+            "下記の出力形式どおりの**ダミー問題**を作れ。内容の正確さは問わない。"
+            "形式（スキーマ）だけは厳密に守ること。"
+        )
+        lines.append("")
     lines.append(f"# 難度\n{level} … {level_description}")
     lines.append("")
     lines.append(f"# 単元\n{unit_name}")
@@ -60,15 +77,42 @@ def _build_user_prompt(
             f"- {p['id']}: {p['name']} / {p.get('summary','')} / 根拠ページ {pages}"
         )
     lines.append("")
-    lines.append(
-        "# 出力JSON形式（このスキーマちょうど。questions は上の観点と同数）\n"
-        '{ "questions": [ { "perspective_id": "観点id", "question": "設問文", '
-        f'"choices": [{"、".join([chr(34)+"選択肢"+str(i+1)+chr(34) for i in range(n_choices)])}], '
-        '"answer_index": 0, "explanation": "解説", "source_pages": [21] } ] }\n'
-        f"- choices はちょうど {n_choices} 個。\n"
-        "- answer_index は0始まり（正答の選択肢の位置）。\n"
-        "- 誤答は『ありそうだが原本に照らすと誤り』にする。明らかすぎる誤答は避ける。"
-    )
+
+    if fmt == "yesno":
+        lines.append(
+            "# 出力JSON形式（このスキーマちょうど。questions は上の観点と同数）\n"
+            '{ "questions": [ { "perspective_id": "観点id", '
+            '"question": "はい/いいえで答えられる断定文の設問", '
+            '"answer": "yes", "explanation": "解説", "source_pages": [21] } ] }\n'
+            "- 初級。各設問は「はい / いいえ」のいずれかで答えられる二択にする。\n"
+            "- 設問文は断定文（〜である／〜が必要である 等）にし、その正誤を問う形にする。\n"
+            '- answer は "yes"（その断定が正しい）/ "no"（誤り）のいずれかちょうど。\n'
+            "- 選択肢（choices）は出力しない。はい/いいえは固定で付与される。"
+        )
+    elif fmt == "fill_in":
+        lines.append(
+            "# 出力JSON形式（このスキーマちょうど。questions は上の観点と同数）\n"
+            '{ "questions": [ { "perspective_id": "観点id", '
+            '"question": "重要語句を ____ で伏せた文", '
+            '"blanks": [ { "variants": ["正解の表記", "表記揺れ1", "略称など"] } ], '
+            '"explanation": "解説", "source_pages": [21] } ] }\n'
+            "- 上級。文中の重要語句を1〜2箇所、半角アンダースコア4つ「____」で伏せた穴埋めにする。\n"
+            "- 空欄の数だけ blanks を文中の出現順に並べる（1〜2個）。\n"
+            "- 各空欄の variants には、正解の表記揺れ候補（漢字／ひらがな／カタカナ、略称、別称、"
+            "英字略号など、解答として正答扱いすべき表記）を必ず複数併記する。\n"
+            "- choices や answer_index は出力しない。"
+        )
+    else:  # choice
+        lines.append(
+            "# 出力JSON形式（このスキーマちょうど。questions は上の観点と同数）\n"
+            '{ "questions": [ { "perspective_id": "観点id", "question": "…として正しいものはどれか。", '
+            f'"choices": [{"、".join([chr(34)+"選択肢"+str(i+1)+chr(34) for i in range(n_choices)])}], '
+            '"answer_index": 0, "explanation": "解説", "source_pages": [21] } ] }\n'
+            f"- choices はちょうど {n_choices} 個。\n"
+            "- answer_index は0始まり（正答の選択肢の位置）。\n"
+            "- 設問文の語尾は「〜として正しいものはどれか。」等で統一する。\n"
+            "- 誤答は『ありそうだが原本に照らすと誤り』にする。明らかすぎる誤答は避ける。"
+        )
     return "\n".join(lines)
 
 
@@ -95,15 +139,94 @@ def _real_llm_call(system_blocks: list, user_text: str) -> Tuple[str, dict]:
     return text, usage
 
 
-def _parse_and_validate(raw: str, expected_choices: int) -> List[dict]:
-    """LLM応答JSONをパースして検証する。不正なら ValueError。"""
+def _strip_fences(raw: str) -> str:
     text = raw.strip()
-    # 念のためコードフェンスが付いた場合に剥がす
     if text.startswith("```"):
         text = text.strip("`")
         if text.lstrip().lower().startswith("json"):
             text = text.lstrip()[4:]
-    data = json.loads(text)
+    return text
+
+
+def _validate_choice(i: int, q: dict, expected_choices: int) -> dict:
+    """選択式（中級）の1問を検証し、内部形式に正規化する。"""
+    question = q.get("question")
+    choices = q.get("choices")
+    answer_index = q.get("answer_index")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(f"questions[{i}].question が不正")
+    if not isinstance(choices, list) or len(choices) != expected_choices:
+        raise ValueError(
+            f"questions[{i}].choices は {expected_choices} 個必要"
+            f"（実際 {len(choices) if isinstance(choices, list) else 'N/A'}）"
+        )
+    if not all(isinstance(c, str) and c.strip() for c in choices):
+        raise ValueError(f"questions[{i}].choices に空文字が含まれる")
+    if not isinstance(answer_index, int) or not (0 <= answer_index < expected_choices):
+        raise ValueError(f"questions[{i}].answer_index が範囲外")
+    return {
+        "perspective_id": q.get("perspective_id", ""),
+        "type": "choice",
+        "question": question.strip(),
+        "choices": [c.strip() for c in choices],
+        "answer": answer_index,  # 0始まり
+        "explanation": (q.get("explanation") or "").strip(),
+        "source_pages": q.get("source_pages", []),
+    }
+
+
+def _validate_yesno(i: int, q: dict) -> dict:
+    """Yes/No（初級）の1問を検証し、はい/いいえ固定の選択式に正規化する。"""
+    question = q.get("question")
+    answer = q.get("answer")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(f"questions[{i}].question が不正")
+    if not isinstance(answer, str) or answer.strip().lower() not in ("yes", "no"):
+        raise ValueError(f"questions[{i}].answer は 'yes' / 'no' のいずれか")
+    answer_index = 0 if answer.strip().lower() == "yes" else 1  # はい=0 / いいえ=1
+    return {
+        "perspective_id": q.get("perspective_id", ""),
+        "type": "choice",  # 採点は選択式を流用（はい/いいえの2択）
+        "question": question.strip(),
+        "choices": list(YESNO_CHOICES),
+        "answer": answer_index,
+        "explanation": (q.get("explanation") or "").strip(),
+        "source_pages": q.get("source_pages", []),
+    }
+
+
+def _validate_fill_in(i: int, q: dict) -> dict:
+    """穴埋め（上級）の1問を検証し、内部形式に正規化する。"""
+    question = q.get("question")
+    blanks = q.get("blanks")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(f"questions[{i}].question が不正")
+    if not isinstance(blanks, list) or not (1 <= len(blanks) <= 2):
+        raise ValueError(f"questions[{i}].blanks は1〜2個の配列が必要")
+    norm_blanks = []
+    for j, b in enumerate(blanks):
+        if not isinstance(b, dict):
+            raise ValueError(f"questions[{i}].blanks[{j}] が dict でない")
+        variants = b.get("variants")
+        if not isinstance(variants, list) or not variants:
+            raise ValueError(f"questions[{i}].blanks[{j}].variants が空")
+        clean = [v.strip() for v in variants if isinstance(v, str) and v.strip()]
+        if not clean:
+            raise ValueError(f"questions[{i}].blanks[{j}].variants に有効な候補がない")
+        norm_blanks.append({"variants": clean})
+    return {
+        "perspective_id": q.get("perspective_id", ""),
+        "type": "fill_in",
+        "question": question.strip(),
+        "blanks": norm_blanks,
+        "explanation": (q.get("explanation") or "").strip(),
+        "source_pages": q.get("source_pages", []),
+    }
+
+
+def _parse_and_validate(raw: str, fmt: str, expected_choices: int) -> List[dict]:
+    """LLM応答JSONをパースし、出題形式 fmt に応じて検証・正規化する。不正なら ValueError。"""
+    data = json.loads(_strip_fences(raw))
     questions = data.get("questions")
     if not isinstance(questions, list) or not questions:
         raise ValueError("questions 配列が空または不正")
@@ -111,80 +234,79 @@ def _parse_and_validate(raw: str, expected_choices: int) -> List[dict]:
     for i, q in enumerate(questions):
         if not isinstance(q, dict):
             raise ValueError(f"questions[{i}] が dict でない")
-        question = q.get("question")
-        choices = q.get("choices")
-        answer_index = q.get("answer_index")
-        if not isinstance(question, str) or not question.strip():
-            raise ValueError(f"questions[{i}].question が不正")
-        if not isinstance(choices, list) or len(choices) != expected_choices:
-            raise ValueError(
-                f"questions[{i}].choices は {expected_choices} 個必要（実際 {len(choices) if isinstance(choices, list) else 'N/A'}）"
-            )
-        if not all(isinstance(c, str) and c.strip() for c in choices):
-            raise ValueError(f"questions[{i}].choices に空文字が含まれる")
-        if not isinstance(answer_index, int) or not (0 <= answer_index < expected_choices):
-            raise ValueError(f"questions[{i}].answer_index が範囲外")
-        out.append(
-            {
-                "perspective_id": q.get("perspective_id", ""),
-                "question": question.strip(),
-                "choices": [c.strip() for c in choices],
-                "answer": answer_index,  # 内部は0始まり（固定プールと同じ）
-                "explanation": (q.get("explanation") or "").strip(),
-                "source_pages": q.get("source_pages", []),
-            }
-        )
+        if fmt == "yesno":
+            out.append(_validate_yesno(i, q))
+        elif fmt == "fill_in":
+            out.append(_validate_fill_in(i, q))
+        else:
+            out.append(_validate_choice(i, q, expected_choices))
     return out
 
 
-def generate(
+def generate_questions(
     level: str,
     unit_id: str,
-    n: int,
+    perspectives: List[dict],
     seed: Optional[int] = None,
     llm_call: Optional[LLMCall] = None,
     max_retries: int = 2,
+    test_mode: bool = False,
 ) -> dict:
-    """観点をサンプリングし、LLMで n 問生成する。
+    """与えられた観点リストから問題を生成する（サンプリングは呼び出し側の責務）。
+
+    ヘッド／テイル分割（開始の体感待ち短縮）のため、サンプリングと生成を分離した。
+    渡された観点ちょうどの数だけ問題を返す（多く返ってきたら先頭で切り詰める）。
+    原本テキストはこの観点群の source_pages から都度組み立てる。
+
+    test_mode のときは原本（知識ベース）を参照せず簡略プロンプトでダミー生成する。
+    ただし LLM 呼び出しの経路自体は本番と同一（配線の動作確認を兼ねる）。
+
+    Args:
+        seed: メトリクス記録用に渡された seed をそのまま載せるだけ（生成には未使用）。
 
     Returns:
         {"questions": [...], "metrics": {...}}
         questions は answer/explanation を含む内部形式。
     Raises:
-        RAGGenerationError: 観点メタ不在・API未設定・検証失敗の最終リトライ超過など。
+        RAGGenerationError: 観点メタ不在・観点0件・API未設定・検証失敗の最終リトライ超過など。
     """
     meta = rag_perspectives.get_meta(level, unit_id)
     if meta is None:
         raise RAGGenerationError(
             f"観点メタがありません: level={level}, unit={unit_id}"
         )
-
-    perspectives, used_seed = rag_perspectives.sample_perspectives(
-        level, unit_id, n, seed=seed
-    )
     if not perspectives:
         raise RAGGenerationError(
             f"観点が0件です: level={level}, unit={unit_id}"
         )
+    want = len(perspectives)
+    fmt = _format_for_level(level)
 
-    # 根拠テキスト: サンプリングした観点の source_pages を集約
-    all_pages: List[int] = []
-    for p in perspectives:
-        for pg in p.get("source_pages", []):
-            if pg not in all_pages:
-                all_pages.append(pg)
-    source_text = rag_source.text_for_pages(all_pages)
-    grounding = "pdf" if source_text else "summary"
+    # 根拠テキスト: 渡された観点の source_pages を集約（テストモードでは参照しない）
+    if test_mode:
+        source_text = ""
+        grounding = "test"
+    else:
+        all_pages: List[int] = []
+        for p in perspectives:
+            for pg in p.get("source_pages", []):
+                if pg not in all_pages:
+                    all_pages.append(pg)
+        source_text = rag_source.text_for_pages(all_pages)
+        grounding = "pdf" if source_text else "summary"
 
     user_prompt = _build_user_prompt(
         level=level,
         unit_name=meta.get("unit_name", unit_id),
         level_description=meta.get("level_description", ""),
         perspectives=perspectives,
+        fmt=fmt,
         n_choices=RAG_CHOICES,
+        test_mode=test_mode,
     )
     # システムブロック: 指示は静的。原本テキストは大きく同一単元の連続生成で
     # 使い回せるため、キャッシュ対象（ephemeral）ブロックとして置く。
+    # ヘッド生成でキャッシュが温まり、テイル生成では原本入力が実質タダになる。
     system_blocks = [{"type": "text", "text": _SYSTEM_INSTRUCTIONS}]
     if source_text:
         system_blocks.append(
@@ -206,11 +328,17 @@ def generate(
         attempts_used = attempt + 1
         try:
             raw, usage = call(system_blocks, user_prompt)
-            questions = _parse_and_validate(raw, RAG_CHOICES)
+            parsed = _parse_and_validate(raw, fmt, RAG_CHOICES)
+            if len(parsed) < want:
+                # 要求した観点数に満たない生成は無音で通さずリトライ対象にする
+                raise ValueError(
+                    f"生成数が不足（要求 {want} / 実際 {len(parsed)}）"
+                )
+            questions = parsed[:want]  # 多い場合は先頭で切り詰める
             break
         except RAGGenerationError:
             raise  # API未設定などは即時に上げる
-        except Exception as e:  # JSON不正・検証失敗はリトライ対象
+        except Exception as e:  # JSON不正・検証失敗・件数不足はリトライ対象
             last_err = e
             questions = []
     if not questions:
@@ -224,10 +352,74 @@ def generate(
         "latency_ms": latency_ms,
         "input_tokens": usage.get("input_tokens"),
         "output_tokens": usage.get("output_tokens"),
-        "seed": used_seed,
+        "seed": seed,
         "perspective_ids": [p["id"] for p in perspectives],
         "grounding": grounding,
         "retries": attempts_used - 1,
         "n_choices": RAG_CHOICES,
+        "format": fmt,
+        "test": bool(test_mode),
     }
     return {"questions": questions, "metrics": metrics}
+
+
+def generate(
+    level: str,
+    unit_id: str,
+    n: int,
+    seed: Optional[int] = None,
+    llm_call: Optional[LLMCall] = None,
+    max_retries: int = 2,
+) -> dict:
+    """観点をサンプリングし、LLMで n 問を一括生成する（分割しない従来経路）。
+
+    ヘッド／テイル分割を使わない呼び出し側のために残す薄いラッパ。
+    サンプリング → generate_questions に委譲する。
+    """
+    perspectives, used_seed = rag_perspectives.sample_perspectives(
+        level, unit_id, n, seed=seed
+    )
+    if not perspectives:
+        raise RAGGenerationError(
+            f"観点が0件です: level={level}, unit={unit_id}"
+        )
+    return generate_questions(
+        level,
+        unit_id,
+        perspectives,
+        seed=used_seed,
+        llm_call=llm_call,
+        max_retries=max_retries,
+    )
+
+
+def merge_metrics(head: dict, tail: dict) -> dict:
+    """ヘッド／テイル2回ぶんの生成メトリクスを1つに合算する。
+
+    result 画面が参照するキー（latency_ms・input/output_tokens・perspective_ids 等）は
+    全て維持しつつ、トークンは合算・観点idは連結・seedはヘッドのものを採る。
+    """
+    def _add(a, b):
+        if a is None and b is None:
+            return None
+        return (a or 0) + (b or 0)
+
+    head = head or {}
+    tail = tail or {}
+    return {
+        "model": head.get("model") or tail.get("model"),
+        "latency_ms": _add(head.get("latency_ms"), tail.get("latency_ms")),
+        "input_tokens": _add(head.get("input_tokens"), tail.get("input_tokens")),
+        "output_tokens": _add(head.get("output_tokens"), tail.get("output_tokens")),
+        "seed": head.get("seed"),
+        "perspective_ids": (head.get("perspective_ids") or [])
+        + (tail.get("perspective_ids") or []),
+        "grounding": head.get("grounding") or tail.get("grounding"),
+        "retries": _add(head.get("retries"), tail.get("retries")),
+        "n_choices": head.get("n_choices") or tail.get("n_choices"),
+        "format": head.get("format") or tail.get("format"),
+        "test": bool(head.get("test") or tail.get("test")),
+        # 内訳（参考。result 画面は未参照でも害なし）
+        "head_latency_ms": head.get("latency_ms"),
+        "tail_latency_ms": tail.get("latency_ms"),
+    }

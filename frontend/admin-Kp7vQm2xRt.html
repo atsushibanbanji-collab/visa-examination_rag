@@ -18,18 +18,14 @@
 
     <main id="content" style="display:none;">
       <section class="card">
-        <h2>サマリー</h2>
-        <div class="stat-grid" id="stat-grid"></div>
-      </section>
-
-      <section class="card">
-        <h2>ユーザー別 集計</h2>
+        <h2>受験者一覧</h2>
+        <p class="muted">クリア済み単元の多い順。受験者名をクリックすると、その受験者の履歴を表示します。</p>
         <div id="users-area"></div>
       </section>
 
-      <section class="card">
-        <h2>受験履歴（最新順）</h2>
-        <div id="attempts-area"></div>
+      <section class="card" id="history-card" style="display:none;">
+        <h2 id="history-title">受験履歴</h2>
+        <div id="history-area"></div>
       </section>
 
       <p class="note">※本画面はURL難読化のみで保護されています。本番運用時はBasic認証やIP制限等の追加保護を検討してください。</p>

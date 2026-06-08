@@ -1,12 +1,12 @@
 // ===========================
 // ビザ検定 - 管理画面ロジック（RAG出題）
+// 受験者一覧（名前＋単元別進捗・クリア数降順）と、名前クリックでの個別履歴（正答率のみ）。
 // ===========================
 
 (function () {
   // URLのファイル名からトークンを推定（admin-Kp7vQm2xRt.html → Kp7vQm2xRt）
   function detectAdminToken() {
-    const path = location.pathname; // e.g. /admin-Kp7vQm2xRt.html
-    const m = path.match(/admin-([a-zA-Z0-9_-]+)\.html$/);
+    const m = location.pathname.match(/admin-([a-zA-Z0-9_-]+)\.html$/);
     return m ? m[1] : "";
   }
 
@@ -16,11 +16,19 @@
   const contentEl = document.getElementById("content");
   const errorArea = document.getElementById("error-area");
   const errorMsg = document.getElementById("error-message");
-  const statGrid = document.getElementById("stat-grid");
   const usersArea = document.getElementById("users-area");
-  const attemptsArea = document.getElementById("attempts-area");
+  const historyCard = document.getElementById("history-card");
+  const historyTitle = document.getElementById("history-title");
+  const historyArea = document.getElementById("history-area");
 
-  // escapeHtml / pillClass / fmtDate / levelLabel は common.js に共通化
+  // escapeHtml / fmtDate / levelLabel は common.js に共通化
+
+  // 正答率(%) → 色クラス（管理画面の閾値: 満点=緑 / 61〜99=黄 / 60以下=赤）
+  function rateClass(pct) {
+    if (pct >= 100) return "high"; // 緑
+    if (pct >= 61) return "mid";   // 黄
+    return "low";                  // 赤
+  }
 
   function showError(msg) {
     loadingEl.style.display = "none";
@@ -41,86 +49,85 @@
       return;
     }
     try {
-      const [users, attempts, cells] = await Promise.all([
-        fetchJson(`/api/${ADMIN_TOKEN}/admin/users`),
-        fetchJson(`/api/${ADMIN_TOKEN}/admin/attempts`),
-        fetchJson(`/api/rag/cells`),
-      ]);
-      // 単元ID→表示名マップ（履歴表示用）
-      const unitNameMap = {};
-      (cells.cells || []).forEach((c) => { unitNameMap[c.unit_id] = c.unit_name; });
-      render(users.users, attempts.attempts, unitNameMap);
+      const data = await fetchJson(`/api/${ADMIN_TOKEN}/admin/users`);
+      renderUsers(data.users || []);
+      loadingEl.style.display = "none";
+      contentEl.style.display = "block";
     } catch (e) {
       showError(`データの取得に失敗しました: ${e.message}`);
     }
   }
 
-  function render(users, attempts, unitNameMap) {
-    // サマリー
-    const totalAttempts = attempts.length;
-    const uniqueUsers = users.length;
-    const avgScore = attempts.length
-      ? Math.round(attempts.reduce((s, a) => s + (a.score / a.total) * 100, 0) / attempts.length)
-      : 0;
-    const latest = attempts.length ? fmtDate(attempts[0].taken_at) : "—";
+  function progressChip(u) {
+    // 単元別進捗チップ: クリア済み or 通算満点 N/3
+    if (u.cleared) {
+      return `<span class="prog-chip prog-chip--cleared">${escapeHtml(u.unit_name)}（${levelLabel(u.level)}）クリア済み</span>`;
+    }
+    return `<span class="prog-chip">${escapeHtml(u.unit_name)}（${levelLabel(u.level)}）通算 ${u.perfect_count}/${u.required}</span>`;
+  }
 
-    statGrid.innerHTML = `
-      <div class="stat"><div class="num">${totalAttempts}</div><div class="lbl">総受験回数</div></div>
-      <div class="stat"><div class="num">${uniqueUsers}</div><div class="lbl">受験者数</div></div>
-      <div class="stat"><div class="num">${avgScore}%</div><div class="lbl">平均正答率</div></div>
-      <div class="stat"><div class="num" style="font-size:14px;line-height:1.8;">${latest}</div><div class="lbl">最新受験</div></div>
-    `;
-
-    // ユーザー別
+  function renderUsers(users) {
     if (users.length === 0) {
       usersArea.innerHTML = '<div class="empty">受験データはまだありません</div>';
-    } else {
-      const rows = users.map(u => {
-        const best = u.best_pct == null ? 0 : Math.round(u.best_pct);
-        const avg = u.avg_pct == null ? 0 : Math.round(u.avg_pct);
-        return `<tr>
-          <td>${escapeHtml(u.username)}</td>
-          <td>${u.attempts_count}</td>
-          <td><span class="score-pill ${pillClass(best)}">${best}%</span></td>
-          <td><span class="score-pill ${pillClass(avg)}">${avg}%</span></td>
-          <td>${fmtDate(u.last_taken_at)}</td>
-        </tr>`;
-      }).join("");
-      usersArea.innerHTML = `
-        <table class="data">
-          <thead><tr><th>受験者名</th><th>受験回数</th><th>最高</th><th>平均</th><th>最終受験</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
+      return;
     }
+    const rows = users.map((u) => {
+      const chips = (u.units || []).map(progressChip).join(" ");
+      return `<tr>
+        <td><button type="button" class="user-link" data-user="${escapeHtml(u.username)}">${escapeHtml(u.username)}</button></td>
+        <td class="cleared-num">${u.cleared_count}</td>
+        <td class="prog-cell">${chips || '<span class="muted">進捗なし</span>'}</td>
+      </tr>`;
+    }).join("");
+    usersArea.innerHTML = `
+      <table class="data">
+        <thead><tr><th>受験者名</th><th>クリア単元数</th><th>単元別進捗</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    usersArea.querySelectorAll(".user-link").forEach((btn) => {
+      btn.addEventListener("click", () => loadHistory(btn.dataset.user));
+    });
+  }
 
-    // 受験履歴
+  async function loadHistory(username) {
+    historyCard.style.display = "block";
+    historyTitle.textContent = `受験履歴：${username}`;
+    historyArea.innerHTML = '<div class="loading">読み込み中…</div>';
+    historyCard.scrollIntoView({ behavior: "smooth", block: "start" });
+    try {
+      const data = await fetchJson(
+        `/api/${ADMIN_TOKEN}/admin/history?username=${encodeURIComponent(username)}`
+      );
+      renderHistory(data.attempts || []);
+    } catch (e) {
+      historyArea.innerHTML = `<div class="empty">履歴の取得に失敗しました: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function renderHistory(attempts) {
     if (attempts.length === 0) {
-      attemptsArea.innerHTML = '<div class="empty">受験データはまだありません</div>';
-    } else {
-      const rows = attempts.map(a => {
-        const pct = Math.round((a.score / a.total) * 100);
-        const kind = a.unit
-          ? escapeHtml(unitNameMap[a.unit] || a.unit)
-          : `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
-        return `<tr>
-          <td>${fmtDate(a.taken_at)}</td>
-          <td>${escapeHtml(a.username)}</td>
-          <td>${kind}</td>
-          <td>${a.score} / ${a.total}</td>
-          <td><span class="score-pill ${pillClass(pct)}">${pct}%</span></td>
-        </tr>`;
-      }).join("");
-      attemptsArea.innerHTML = `
-        <table class="data">
-          <thead><tr><th>受験日時</th><th>受験者名</th><th>単元</th><th>得点</th><th>正答率</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
+      historyArea.innerHTML = '<div class="empty">この受験者の履歴はありません</div>';
+      return;
     }
-
-    loadingEl.style.display = "none";
-    contentEl.style.display = "block";
+    // 得点は出さず、正答率を色分けで表示する
+    const rows = attempts.map((a) => {
+      const kind = a.unit_name
+        ? escapeHtml(a.unit_name)
+        : `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
+      return `<tr>
+        <td>${fmtDate(a.taken_at)}</td>
+        <td>${kind}</td>
+        <td>${levelLabel(a.level)}</td>
+        <td><span class="score-pill ${rateClass(a.pct)}">${a.pct}%</span></td>
+      </tr>`;
+    }).join("");
+    historyArea.innerHTML = `
+      <table class="data">
+        <thead><tr><th>受験日時</th><th>単元</th><th>レベル</th><th>正答率</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
   }
 
   load();
