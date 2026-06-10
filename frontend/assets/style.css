@@ -1128,3 +1128,17 @@ code {
   text-decoration: underline;
 }
 .user-link:hover { opacity: .8; }
+
+/* ===== 管理画面: 個別履歴の行全体を正答率バンドで色付け（数値は非表示） ===== */
+.hist-table td { border-left: none; }
+.hist-row--high td { background: var(--success-bg); }
+.hist-row--mid  td { background: #fff4e0; }
+.hist-row--low  td { background: var(--danger-bg); }
+.hist-row--high td:first-child { box-shadow: inset 4px 0 0 var(--success); }
+.hist-row--mid  td:first-child { box-shadow: inset 4px 0 0 #c98a16; }
+.hist-row--low  td:first-child { box-shadow: inset 4px 0 0 var(--danger); }
+.hist-legend { margin-top: 10px; font-size: 12px; }
+.hist-legend .lg { padding: 1px 6px; border-radius: 8px; margin: 0 2px; }
+.hist-legend .lg-high { background: var(--success-bg); color: var(--success); }
+.hist-legend .lg-mid  { background: #fff4e0; color: #8a6d2f; }
+.hist-legend .lg-low  { background: var(--danger-bg); color: var(--danger); }

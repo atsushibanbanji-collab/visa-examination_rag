@@ -237,7 +237,7 @@ chk(astart["questions"][0].get("type") == "fill_in" and astart["questions"][0].g
 chk("choices" not in astart["questions"][0], "[fmt] 上級start: 公開問題にchoices無し")
 chk(astart["gen_metrics"].get("format") == "fill_in", "[fmt] 上級start: format=fill_in")
 
-# ============ 項目6: テストモード ============
+# ============ 項目6: テストモード（構築段階＝記録する。名前トリガー併存） ============
 tstart = c.post("/api/rag/quiz/start",
                 json={"username": "tester", "level": "beginner", "unit": "b_visa", "test": True}).json()
 chk(tstart.get("test") is True and tstart.get("total_questions") == 2,
@@ -246,14 +246,20 @@ chk(tstart.get("pending_count") == 0, "[test] start: テイル無し（2問は�
 chk(tstart["gen_metrics"].get("grounding") == "test" and tstart["gen_metrics"].get("test") is True,
     "[test] start: 原本非参照（grounding=test）・経路は本番同一")
 tsid = tstart["session_id"]
-# 採点しても履歴・進捗に記録されない（本番フローを汚さない）
+# 構築段階: テストモードでも記録する（管理画面の確認用）
 tans = [{"id": q["id"], "choice": 0} for q in tstart["questions"]]
 tres = c.post("/api/quiz/submit", json={"username": "tester", "level": "beginner",
               "unit": "b_visa", "session_id": tsid, "answers": tans}).json()
-chk(tres.get("test") is True and tres.get("attempt_id") is None and tres.get("unit_progress") is None,
-    "[test] submit: 記録せず（attempt_id/progress=null）")
-chk(len(c.get("/api/history?username=tester").json()["attempts"]) == 0,
-    "[test] submit: 履歴に残らない")
+chk(tres.get("test") is True and tres.get("attempt_id") is not None and tres.get("unit_progress") is not None,
+    "[test] submit: 記録する（attempt_id/progress あり）")
+chk(len(c.get("/api/history?username=tester").json()["attempts"]) >= 1,
+    "[test] submit: 履歴に残る")
+
+# 名前トリガー: username が「テストモード」なら ?test なしでも発動
+ntstart = c.post("/api/rag/quiz/start",
+                 json={"username": "テストモード", "level": "beginner", "unit": "b_visa"}).json()
+chk(ntstart.get("test") is True and ntstart.get("total_questions") == 2,
+    "[test] 名前『テストモード』で ?test なしでも発動")
 
 # ============ 固定プール方式の経路が消えたこと ============
 chk(c.get("/api/levels").status_code == 404, "[gone] /api/levels が404")

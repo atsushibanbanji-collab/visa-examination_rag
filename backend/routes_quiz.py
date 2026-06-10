@@ -132,7 +132,9 @@ def rag_quiz_start(req: RagStartRequest):
 
     # 観点は最初に全数サンプリング（LLM不要）。ヘッド／テイルに分割する。
     # テストモードでは出題数を絞り、原本非参照のダミーを生成する（経路は本番同一）。
-    total_n = RAG_TEST_QUESTIONS if req.test else RAG_QUESTIONS_PER_QUIZ
+    # 起動: ?test=1 のほか、受験者名が「テストモード」でも発動する（?test 載せ忘れ対策）。
+    is_test = req.test or username == "テストモード"
+    total_n = RAG_TEST_QUESTIONS if is_test else RAG_QUESTIONS_PER_QUIZ
     perspectives, seed = rag_perspectives.sample_perspectives(
         req.level, req.unit, total_n
     )
@@ -143,7 +145,7 @@ def rag_quiz_start(req: RagStartRequest):
 
     try:
         gen = rag_generator.generate_questions(
-            req.level, req.unit, head, seed=seed, test_mode=req.test
+            req.level, req.unit, head, seed=seed, test_mode=is_test
         )
     except rag_generator.RAGGenerationError as e:
         msg = str(e)
@@ -167,7 +169,7 @@ def rag_quiz_start(req: RagStartRequest):
         "total_questions": len(perspectives),
         "head_count": len(head),
         "pending_count": len(tail),
-        "test": req.test,
+        "test": is_test,
         "gen_metrics": gen["metrics"],
     }
 
@@ -293,21 +295,9 @@ def submit_quiz(req: SubmitRequest):
         raise HTTPException(400, "有効な解答がない")
 
     # テストモードのセッションは記録しない（履歴・進捗を汚さない）。
+    # 構築段階では、テストモードの受験も履歴・進捗に記録する（管理画面の動作確認用）。
+    # 後で識別・除外できるよう、details の meta に test フラグを残す。
     is_test = bool(session_meta.get("test"))
-    if is_test:
-        return {
-            "attempt_id": None,
-            "username": username,
-            "level": req.level,
-            "unit": req.unit,
-            "score": score,
-            "total": total,
-            "passed": score == total,
-            "required_streak": UNIT_CLEAR_REQUIRED_STREAK,
-            "unit_progress": None,
-            "test": True,
-            "results": results,
-        }
 
     # 履歴を保存。単元情報・生成メタは details JSON 内の meta に格納する。
     details_payload = json.dumps(
@@ -316,6 +306,7 @@ def submit_quiz(req: SubmitRequest):
                 "unit": req.unit,
                 "is_graduation": False,
                 "source": SOURCE_RAG,
+                "test": is_test,
                 "metrics": session_meta,
             },
             "answers": [
@@ -358,6 +349,7 @@ def submit_quiz(req: SubmitRequest):
         "passed": score == total,
         "required_streak": UNIT_CLEAR_REQUIRED_STREAK,
         "unit_progress": unit_progress,
+        "test": is_test,
         "results": results,
     }
 

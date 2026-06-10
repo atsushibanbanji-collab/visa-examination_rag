@@ -18,7 +18,7 @@ ALLOWED_LEVELS = ("beginner", "intermediate", "advanced")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "Kp7vQm2xRt")
 
 # --- 出題・採点のルール ---
-UNIT_CLEAR_REQUIRED_STREAK = 3      # 単元クリアに必要な連続満点回数
+UNIT_CLEAR_REQUIRED_STREAK = 3      # 単元クリアに必要な通算満点回数（累計方式。外しても減らない）
 
 # 出題対象の単元（当面、ビザ種別の単元のみに限定する）。
 # 永住権(green_card)・ビザの基本(basics)など、ビザ種別でない単元は単元選択画面から除外する。

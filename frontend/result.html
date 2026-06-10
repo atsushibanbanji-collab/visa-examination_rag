@@ -23,13 +23,6 @@
         <div class="pct" id="pct">0%</div>
       </div>
 
-      <!-- RAG生成メトリクス -->
-      <section class="card" id="rag-metrics-card" style="display:none;">
-        <h2>RAG生成メトリクス</h2>
-        <div class="rag-metrics" id="rag-metrics"></div>
-        <p class="muted" id="rag-perspectives"></p>
-      </section>
-
       <!-- 連続記録の更新表示 -->
       <section class="card" id="streak-banner" style="display:none;">
         <h2 id="streak-title">連続記録の更新</h2>
@@ -98,10 +91,8 @@
       pctEl.textContent = `${pct}%`;
 
       if (result.test) {
-        userLabel.textContent += "｜テストモード（履歴・進捗には記録されません）";
+        userLabel.textContent += "｜テストモード（2問・ダミー生成。構築段階のため記録されます）";
       }
-
-      if (result.gen_metrics) renderRagMetrics(result.gen_metrics);
 
       const unitsParams = new URLSearchParams({ user: name, level: lvl });
       unitsLink.href = `/units.html?${unitsParams.toString()}`;
@@ -143,28 +134,6 @@
           nextLink.style.display = "inline-block";
         }
       } catch (_) {}
-    }
-
-    function renderRagMetrics(m) {
-      const card = document.getElementById("rag-metrics-card");
-      const grid = document.getElementById("rag-metrics");
-      const persp = document.getElementById("rag-perspectives");
-      const groundingLabel = { pdf: "原本PDF", summary: "観点要約" }[m.grounding] || m.grounding;
-      const cells = [
-        ["生成レイテンシ", m.latency_ms != null ? `${m.latency_ms} ms` : "—"],
-        ["入力トークン", m.input_tokens != null ? m.input_tokens : "—"],
-        ["出力トークン", m.output_tokens != null ? m.output_tokens : "—"],
-        ["モデル", m.model || "—"],
-        ["根拠", groundingLabel || "—"],
-        ["再生成", m.retries != null ? `${m.retries} 回` : "—"],
-      ];
-      grid.innerHTML = cells.map(([k, v]) =>
-        `<div class="rag-metric"><span class="rm-key">${k}</span><span class="rm-val">${escapeHtml(String(v))}</span></div>`
-      ).join("");
-      if (Array.isArray(m.perspective_ids) && m.perspective_ids.length) {
-        persp.textContent = `使用観点: ${m.perspective_ids.join(", ")}（seed: ${m.seed}）`;
-      }
-      card.style.display = "block";
     }
 
     function renderUnitStreak(result) {

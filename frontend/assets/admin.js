@@ -110,23 +110,24 @@
       historyArea.innerHTML = '<div class="empty">この受験者の履歴はありません</div>';
       return;
     }
-    // 得点は出さず、正答率を色分けで表示する
+    // 正答率の数値は表示せず、記録1行全体を正答率バンドで色付けする
+    // （満点=緑 / 61〜99%=黄 / 60%以下=赤）。
     const rows = attempts.map((a) => {
       const kind = a.unit_name
         ? escapeHtml(a.unit_name)
         : `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
-      return `<tr>
+      return `<tr class="hist-row hist-row--${rateClass(a.pct)}">
         <td>${fmtDate(a.taken_at)}</td>
         <td>${kind}</td>
         <td>${levelLabel(a.level)}</td>
-        <td><span class="score-pill ${rateClass(a.pct)}">${a.pct}%</span></td>
       </tr>`;
     }).join("");
     historyArea.innerHTML = `
-      <table class="data">
-        <thead><tr><th>受験日時</th><th>単元</th><th>レベル</th><th>正答率</th></tr></thead>
+      <table class="data hist-table">
+        <thead><tr><th>受験日時</th><th>単元</th><th>レベル</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
+      <p class="muted hist-legend">行の色＝正答率（<span class="lg lg-high">緑：満点</span>／<span class="lg lg-mid">黄：61〜99%</span>／<span class="lg lg-low">赤：60%以下</span>）</p>
     `;
   }
 
