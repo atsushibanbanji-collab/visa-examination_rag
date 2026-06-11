@@ -32,7 +32,7 @@ class RagStartRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=50)
     level: str
     unit: str
-    test: bool = False  # テストモード（2問・原本非参照のダミー・記録しない）
+    test: bool = False  # TEST MODE（撤去予定）: テストモード起動フラグ（2問・原本非参照のダミー）
 
 
 class RagContinueRequest(BaseModel):

@@ -49,7 +49,7 @@ def _build_user_prompt(
     perspectives: List[dict],
     fmt: str,
     n_choices: int,
-    test_mode: bool = False,
+    test_mode: bool = False,  # TEST MODE（撤去予定）
 ) -> str:
     """LLMへ渡すユーザープロンプトを組み立てる（出題形式 fmt で出力スキーマを切替）。
 
@@ -250,7 +250,7 @@ def generate_questions(
     seed: Optional[int] = None,
     llm_call: Optional[LLMCall] = None,
     max_retries: int = 2,
-    test_mode: bool = False,
+    test_mode: bool = False,  # TEST MODE（撤去予定）
 ) -> dict:
     """与えられた観点リストから問題を生成する（サンプリングは呼び出し側の責務）。
 

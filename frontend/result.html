@@ -90,9 +90,11 @@
       const pct = result.total > 0 ? Math.round((result.score / result.total) * 100) : 0;
       pctEl.textContent = `${pct}%`;
 
+      // --- TEST MODE（撤去予定）: テストモード受験の表示ラベル ---
       if (result.test) {
         userLabel.textContent += "｜テストモード（2問・ダミー生成。構築段階のため記録されます）";
       }
+      // --- /TEST MODE ---
 
       const unitsParams = new URLSearchParams({ user: name, level: lvl });
       unitsLink.href = `/units.html?${unitsParams.toString()}`;

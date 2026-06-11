@@ -7,8 +7,9 @@
   const username = (params.get("user") || "").trim();
   const level = params.get("level") || "beginner";
   const unit = params.get("unit") || ""; // "<unit_id>"
-  // テストモード起動: ?test=1 のほか、受験者名が「テストモード」でも発動（併存）
+  // --- TEST MODE（撤去予定）: 起動判定。?test=1 のほか受験者名「テストモード」でも発動 ---
   const testMode = params.get("test") === "1" || username === "テストモード";
+  // --- /TEST MODE ---
 
   const loadingEl = document.getElementById("loading");
   const quizArea = document.getElementById("quiz-area");
