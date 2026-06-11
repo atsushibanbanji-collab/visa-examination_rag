@@ -9,20 +9,23 @@
 </head>
 <body>
   <div class="app-shell">
-    <header class="header" style="position: relative;">
+    <header class="header">
       <h1>ビザ検定</h1>
-      <p class="subtitle">社内向け 知識確認テスト（AI出題）</p>
-      <!-- ===== DEV ONLY（撤去予定）: 管理画面確認用デモデータ生成ボタン ===== -->
-      <!-- 撤去箇所: このブロック / 下部の DEV ONLY スクリプト / backend/routes_dev.py /
-           main.py の include / config.py の DEMO_SEED_ENABLED -->
-      <button id="dev-seed-btn" type="button" hidden
-              style="position: absolute; top: 0; right: 0; font-size: 12px;
-                     padding: 6px 10px; border: 1px dashed #b58900; border-radius: 6px;
-                     background: #fdf6e3; color: #b58900; cursor: pointer;"
-              title="構築段階専用。管理画面確認用のダミー受験者10人分のデータを作成します。">
-        ダミーデータ生成
-      </button>
-      <!-- ===== /DEV ONLY ===== -->
+      <!-- DEV ONLY（撤去予定）: ボタン撤去時はこの div を外して <p class="subtitle"> を header 直下に戻す -->
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+        <p class="subtitle">社内向け 知識確認テスト（AI出題）</p>
+        <!-- ===== DEV ONLY（撤去予定）: 管理画面確認用デモデータ生成ボタン ===== -->
+        <!-- 撤去箇所: このブロック / 下部の DEV ONLY スクリプト / backend/routes_dev.py /
+             main.py の include / config.py の DEMO_SEED_ENABLED -->
+        <button id="dev-seed-btn" type="button" hidden
+                style="font-size: 12px; padding: 4px 10px; border: 1px dashed #b58900;
+                       border-radius: 6px; background: #fdf6e3; color: #b58900;
+                       cursor: pointer; white-space: nowrap;"
+                title="構築段階専用。管理画面確認用のダミー受験者10人分のデータを作成します。">
+          ダミーデータ生成
+        </button>
+        <!-- ===== /DEV ONLY ===== -->
+      </div>
     </header>
 
     <section class="card">
