@@ -362,37 +362,6 @@ def generate_questions(
     }
     return {"questions": questions, "metrics": metrics}
 
-
-def generate(
-    level: str,
-    unit_id: str,
-    n: int,
-    seed: Optional[int] = None,
-    llm_call: Optional[LLMCall] = None,
-    max_retries: int = 2,
-) -> dict:
-    """観点をサンプリングし、LLMで n 問を一括生成する（分割しない従来経路）。
-
-    ヘッド／テイル分割を使わない呼び出し側のために残す薄いラッパ。
-    サンプリング → generate_questions に委譲する。
-    """
-    perspectives, used_seed = rag_perspectives.sample_perspectives(
-        level, unit_id, n, seed=seed
-    )
-    if not perspectives:
-        raise RAGGenerationError(
-            f"観点が0件です: level={level}, unit={unit_id}"
-        )
-    return generate_questions(
-        level,
-        unit_id,
-        perspectives,
-        seed=used_seed,
-        llm_call=llm_call,
-        max_retries=max_retries,
-    )
-
-
 def merge_metrics(head: dict, tail: dict) -> dict:
     """ヘッド／テイル2回ぶんの生成メトリクスを1つに合算する。
 

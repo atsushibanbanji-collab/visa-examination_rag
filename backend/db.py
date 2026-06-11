@@ -20,14 +20,9 @@ DB_PATH = os.environ.get(
     str(Path(__file__).parent / "quiz.db"),
 )
 
-# 卒業試験を unit_progress 上で表現するための特殊 unit_id。
-# 通常 unit との衝突を避けるためアンダースコア囲みにする。
-GRADUATION_UNIT_ID = "__graduation__"
-
 # 出題方式（source）。比較のため両方式の記録を1つのDBで分離して持つ。
 SOURCE_POOL = "pool"
 SOURCE_RAG = "rag"
-ALLOWED_SOURCES = (SOURCE_POOL, SOURCE_RAG)
 
 
 def init_db() -> None:
@@ -244,22 +239,6 @@ def get_all_unit_progress(source: str = SOURCE_POOL):
 # ----------------------------------------------------------------------
 # 単元進捗
 # ----------------------------------------------------------------------
-def get_unit_progress(
-    username: str, level: str, unit_id: str, source: str = SOURCE_POOL
-) -> Optional[dict]:
-    """単一の単元進捗を取得。未受験ならNone。"""
-    with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT perfect_count, streak_count, best_streak, last_taken_at, graduated_at
-            FROM unit_progress
-            WHERE username = ? AND level = ? AND unit_id = ? AND source = ?
-            """,
-            (username, level, unit_id, source),
-        ).fetchone()
-        return dict(row) if row else None
-
-
 def get_progress_map_for_user(
     username: str, level: str, source: str = SOURCE_POOL
 ) -> dict:

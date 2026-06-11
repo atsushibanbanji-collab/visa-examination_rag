@@ -42,27 +42,3 @@ class RagContinueRequest(BaseModel):
     生成・追記する（ヘッド／テイル分割）。
     """
     session_id: str
-
-
-class QuestionPublic(BaseModel):
-    """フロントへ返す形（answer/explanationは含めない）"""
-    id: str
-    category: Optional[str] = None
-    question: str
-    choices: List[str]
-
-
-class QuestionResult(BaseModel):
-    id: str
-    question: str
-    choices: List[str]
-    user_choice: int
-    correct_choice: int
-    is_correct: bool
-    explanation: str = ""
-
-
-class SubmitResponse(BaseModel):
-    score: int
-    total: int
-    results: List[QuestionResult]
