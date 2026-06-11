@@ -131,10 +131,14 @@ def rag_quiz_start(req: RagStartRequest):
         raise HTTPException(404, f"観点メタがありません: level={req.level}, unit={req.unit}")
 
     # 観点は最初に全数サンプリング（LLM不要）。ヘッド／テイルに分割する。
+    # --- TEST MODE（撤去予定）---------------------------------------------------
     # テストモードでは出題数を絞り、原本非参照のダミーを生成する（経路は本番同一）。
     # 起動: ?test=1 のほか、受験者名が「テストモード」でも発動する（?test 載せ忘れ対策）。
+    # 注意: 「テストモード」という氏名による起動は氏名識別（認証化で廃止予定）に依存。
+    #       撤去はテストモード→認証化の順で行うこと（TODO.md の撤去手順参照）。
     is_test = req.test or username == "テストモード"
     total_n = RAG_TEST_QUESTIONS if is_test else RAG_QUESTIONS_PER_QUIZ
+    # --- /TEST MODE -------------------------------------------------------------
     perspectives, seed = rag_perspectives.sample_perspectives(
         req.level, req.unit, total_n
     )
@@ -196,11 +200,24 @@ def rag_quiz_continue(req: RagContinueRequest):
             "gen_metrics": session.get("meta", {}),
         }
 
+    # テイル生成権を原子的に取得（CAS）。同時リクエストが来ても勝者は1つだけで、
+    # 敗者は冪等に空を返す（テイルの二重生成・二重追記を防ぐ）。
+    pending_raw = session.get("pending_raw")
+    if not pending_raw or not rag_session_store.claim_pending(req.session_id, pending_raw):
+        return {
+            "session_id": req.session_id,
+            "questions": [],
+            "gen_metrics": session.get("meta", {}),
+        }
+
     try:
         gen = rag_generator.generate_questions(
             session["level"], session["unit_id"], pend_perspectives
         )
     except rag_generator.RAGGenerationError as e:
+        # 生成失敗時は pending を復元し、フロントの再試行で再生成できるようにする
+        # （クレームしたまま握り潰すと、テイルが永久に欠けた検定になる）。
+        rag_session_store.restore_pending(req.session_id, pending_raw)
         msg = str(e)
         if "ANTHROPIC_API_KEY" in msg:
             raise HTTPException(503, msg)
@@ -294,10 +311,12 @@ def submit_quiz(req: SubmitRequest):
     if total == 0:
         raise HTTPException(400, "有効な解答がない")
 
-    # テストモードのセッションは記録しない（履歴・進捗を汚さない）。
+    # --- TEST MODE（撤去予定）---------------------------------------------------
     # 構築段階では、テストモードの受験も履歴・進捗に記録する（管理画面の動作確認用）。
     # 後で識別・除外できるよう、details の meta に test フラグを残す。
+    # 撤去時: is_test を False 固定にせず、この行と details の test キーごと削除する。
     is_test = bool(session_meta.get("test"))
+    # --- /TEST MODE -------------------------------------------------------------
 
     # 履歴を保存。単元情報・生成メタは details JSON 内の meta に格納する。
     details_payload = json.dumps(
@@ -336,7 +355,9 @@ def submit_quiz(req: SubmitRequest):
     if req.unit:
         perfect = score == total
         unit_progress = db.update_unit_progress(
-            username, req.level, req.unit, perfect, source=SOURCE_RAG,
+            username, req.level, req.unit, perfect,
+            clear_streak_required=UNIT_CLEAR_REQUIRED_STREAK,  # 閾値の真実源は config に一本化
+            source=SOURCE_RAG,
         )
 
     return {

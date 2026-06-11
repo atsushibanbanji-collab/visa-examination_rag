@@ -145,12 +145,15 @@ def save_attempt(
     total: int,
     details: str,
     source: str = SOURCE_POOL,
+    taken_at: Optional[str] = None,
 ) -> int:
     """受験1回分を保存する。
 
     details は呼び出し側で組み立てた JSON 文字列。単元情報（unit / is_graduation）と
     RAG生成メタ（レイテンシ・トークン等）はこの details JSON の中に格納する。
     source は 'pool'（固定プール） / 'rag'（RAG）。
+    taken_at は通常未指定（現在時刻）。デモデータ生成（routes_dev）が過去日時を
+    ばらまく用途でのみ指定する。
     """
     with get_conn() as conn:
         cur = conn.execute(
@@ -158,9 +161,21 @@ def save_attempt(
             INSERT INTO attempts (username, level, source, score, total, taken_at, details)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (username, level, source, score, total, _now_iso(), details),
+            (username, level, source, score, total, taken_at or _now_iso(), details),
         )
         return cur.lastrowid
+
+
+def delete_user_records(username: str) -> int:
+    """指定受験者の attempts / unit_progress を全削除し、削除した attempts 行数を返す。
+
+    デモデータの再生成（routes_dev）前の掃除に使う。通常運用の経路からは呼ばない。
+    """
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM attempts WHERE username = ?", (username,))
+        n = cur.rowcount
+        conn.execute("DELETE FROM unit_progress WHERE username = ?", (username,))
+        return n
 
 
 def _extract_attempt_meta(details_raw: Optional[str]) -> dict:
@@ -266,7 +281,7 @@ def update_unit_progress(
     level: str,
     unit_id: str,
     perfect: bool,
-    clear_streak_required: int = 3,
+    clear_streak_required: Optional[int] = None,
     source: str = SOURCE_POOL,
 ) -> dict:
     """累計方式の進捗更新。満点なら通算満点回数 perfect_count を +1（非満点でも減らさない）。
@@ -276,7 +291,9 @@ def update_unit_progress(
     （満点で+1、非満点で0リセット）が、そつぎょう判定には用いない。
 
     Args:
-        clear_streak_required: そつぎょうに必要な通算満点回数（通常単元は3）。
+        clear_streak_required: そつぎょうに必要な通算満点回数。
+            未指定（None）なら config.UNIT_CLEAR_REQUIRED_STREAK を用いる
+            （閾値の真実源を config に一本化し、ここでの数値の二重定義を避ける）。
         source: 'pool' / 'rag'。方式ごとに進捗を独立管理する。
 
     Returns:
@@ -285,6 +302,10 @@ def update_unit_progress(
         newly_cleared は今回のサブミットで初めてそつぎょう条件に達したかどうか。
     """
     now = _now_iso()
+    if clear_streak_required is None:
+        # 真実源は config.UNIT_CLEAR_REQUIRED_STREAK（遅延importで循環を避ける）
+        from backend.config import UNIT_CLEAR_REQUIRED_STREAK
+        clear_streak_required = UNIT_CLEAR_REQUIRED_STREAK
 
     with get_conn() as conn:
         # まず行を確保（無ければ作る）。INSERT OR IGNORE + 後続 UPDATE で UPSERT。
@@ -429,8 +450,46 @@ def get_quiz_session(session_id: str) -> Optional[dict]:
             return None
         d["questions"] = json.loads(d["questions"])
         d["meta"] = json.loads(d["meta"]) if d["meta"] else {}
+        # pending は dict 化したものに加え、CAS（claim_quiz_session_pending）の
+        # 比較対象として DB 上の生JSON文字列も保持する。
+        d["pending_raw"] = d.get("pending") or None
         d["pending"] = json.loads(d["pending"]) if d.get("pending") else None
         return d
+
+
+def claim_quiz_session_pending(session_id: str, expected_pending_raw: str) -> bool:
+    """テイル生成権を原子的に取得する（compare-and-swap）。
+
+    DB上の pending が expected_pending_raw（取得時の生JSON）と一致する場合のみ
+    NULL にクリアして True を返す。一致しなければ（他リクエストが先に取得済み）
+    何もせず False を返す。同時リクエストによるテイルの二重生成・二重追記を防ぐ。
+    """
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE quiz_sessions
+               SET pending = NULL
+             WHERE session_id = ? AND pending = ?
+            """,
+            (session_id, expected_pending_raw),
+        )
+        return cur.rowcount == 1
+
+
+def restore_quiz_session_pending(session_id: str, pending_raw: str) -> None:
+    """クレーム後にテイル生成が失敗した場合、pending を復元してリトライ可能に戻す。
+
+    pending が NULL（=自分がクレームしたまま）の行にのみ書き戻す。
+    """
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE quiz_sessions
+               SET pending = ?
+             WHERE session_id = ? AND pending IS NULL
+            """,
+            (pending_raw, session_id),
+        )
 
 
 def cleanup_expired_sessions() -> int:

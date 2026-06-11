@@ -199,6 +199,20 @@ def get_session(session_id: str) -> Optional[dict]:
     return db.get_quiz_session(session_id)
 
 
+def claim_pending(session_id: str, pending_raw: str) -> bool:
+    """テイル生成権を原子的に取得する（成功時 True）。
+
+    取得時の生JSON（session["pending_raw"]）と DB の現在値が一致する場合のみ
+    クリアに成功する（CAS）。同時リクエストの二重生成・二重追記を防ぐ。
+    """
+    return db.claim_quiz_session_pending(session_id, pending_raw)
+
+
+def restore_pending(session_id: str, pending_raw: str) -> None:
+    """テイル生成失敗時に pending を書き戻し、再試行可能な状態へ戻す。"""
+    db.restore_quiz_session_pending(session_id, pending_raw)
+
+
 def question_in_session(session: dict, qid: str) -> Optional[dict]:
     """セッション内の問題を qid で引く（正答・解説込み）。なければ None。"""
     for q in session.get("questions", []):

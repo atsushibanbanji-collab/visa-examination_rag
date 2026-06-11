@@ -13,7 +13,8 @@
 4. **原本PDF・APIキー・DBはコミットしない**（`.gitignore` 済み・著作権/秘密情報）。
    原本未配置時は観点summaryを根拠にフォールバック（`grounding=summary`）。
 5. **進捗は (username, level, unit_id, source) で一意。** `source` 列は残してあるが本リポジトリ
-   では常に `'rag'`。10問満点を連続3回で単元クリア。
+   では常に `'rag'`。10問満点を**通算3回**で単元クリア（累計方式。外しても減らない。
+   `unit_progress.perfect_count` で管理。連続満点数 `streak_count` は情報用で判定には使わない）。
 
 ## アーキテクチャ要点
 
