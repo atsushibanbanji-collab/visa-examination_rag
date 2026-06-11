@@ -55,9 +55,18 @@ RAG_QUESTIONS_PER_QUIZ = int(os.environ.get("RAG_QUESTIONS_PER_QUIZ", "10"))
 # 開始時はまず先頭 RAG_HEAD_COUNT 問だけを生成して即返し（=最初の描画を速く）、
 # 残りはユーザーが解いている間に /api/rag/quiz/continue で生成・追記する。
 RAG_HEAD_COUNT = int(os.environ.get("RAG_HEAD_COUNT", "3"))
-# テストモード（動作確認用）の出題数。本番フローを汚さず最小コストで配線を確認する。
+# --- TEST MODE（撤去予定）: 動作確認用テストモードの出題数 ---------------------
+# 本番フローを汚さず最小コストで配線を確認する。撤去手順は TODO.md を参照。
 RAG_TEST_QUESTIONS = int(os.environ.get("RAG_TEST_QUESTIONS", "2"))
+# ------------------------------------------------------------------------------
 RAG_SESSION_TTL_SEC = int(os.environ.get("RAG_SESSION_TTL_SEC", "7200"))  # セッション保持（既定2時間）
+
+# --- DEV ONLY（撤去予定）: 管理画面確認用デモデータ生成ボタン -----------------
+# ホーム画面右上の「ダミーデータ生成」ボタンと /api/dev/seed-demo を有効化する。
+# 構築段階専用。運用移行時は false にするか、routes_dev.py ごと撤去する。
+# 撤去箇所: この定数 / backend/routes_dev.py / main.py の include / index.html のボタン
+DEMO_SEED_ENABLED = os.environ.get("DEMO_SEED_ENABLED", "true").lower() == "true"
+# ------------------------------------------------------------------------------
 RAG_VERIFY_PASS = os.environ.get("RAG_VERIFY_PASS", "false").lower() == "true"  # 生成→検証2パス（既定off）
 RAG_MAX_TOKENS = int(os.environ.get("RAG_MAX_TOKENS", "4000"))
 # 原本PDFは2-up（1物理ページに論理2ページ）。論理ページ→物理ページの除数。
