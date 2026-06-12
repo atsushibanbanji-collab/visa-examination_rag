@@ -5,8 +5,9 @@
 - **現状の課題**：ユーザー識別を姓名ベースのURLパラメータ（`?user=<姓名>`）で行っているため、
   姓名が分かれば他人の受験画面・進捗を閲覧できてしまう脆弱性がある。
 - **将来の方針**：メールアドレス（ID）＋パスワードによるログイン認証へ移行する。
-  - 移行先DBは**マネージドPostgres想定**（Render Postgres / Neon / Supabase。認証built-inの点でSupabase有力）。
-    自動バックアップ・時点復旧があり、Render Freeのディスク揮発問題が消える。
+  - **DB分離は完了済み**：本番データは独立サービスの Render Postgres に保存している
+    （db.py が SQLite/PostgreSQL 両対応。`DATABASE_URL` で切替）。認証実装時に新たなDB移行作業は不要。
+    認証built-inが欲しい場合の Supabase 移行も、接続URLの差し替えで対応できる。
   - **移行作業の本体は username（氏名文字列）→ user_id（usersテーブルのFK）へのマッピング**。
     attempts / unit_progress は現在 username 文字列をキーにしているため、users テーブル新設後に
     両テーブルへ user_id 列を追加し、氏名で突合して埋める。同姓同名は手動解決。
@@ -21,6 +22,16 @@
 - prompt caching の本番投入（実装済み・未テスト）。
 - 除外中の単元（永住権・ビザの基本など）の出題対象への復帰可否の判断。
   データ・観点・プロンプトは保持済み。`config.VISA_TYPE_UNITS` の調整で復帰できる。
+
+## 既知バグ（未修正・修正は要事前承認）
+
+- **テイル生成に test_mode が伝播しない**：`/api/rag/quiz/continue` は
+  `rag_generator.generate_questions` へ `test_mode` を渡していない。
+  現状の既定値（`RAG_TEST_QUESTIONS=2` ≦ `RAG_HEAD_COUNT=3`）ではテストモードの
+  テイルが常に空のため顕在化しないが、`RAG_TEST_QUESTIONS` をヘッド数より大きく
+  設定すると、テイル分が本番同等の生成（原本参照・コスト発生）になる。
+  修正時はセッション meta の test フラグを continue 側で読み、生成へ引き渡すこと。
+  ※テストモード自体が撤去予定のため、撤去が先行するなら修正不要となる。
 
 ## 撤去予定機能の標識と手順（運用移行時）
 

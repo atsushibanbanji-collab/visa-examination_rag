@@ -26,12 +26,25 @@ services:
       # RAGセッション（生成問題の一時保持）TTL秒。既定2時間。
       - key: RAG_SESSION_TTL_SEC
         value: "7200"
-      # 履歴・RAGセッションを永続化したい場合は Persistent Disk をマウントし、
-      # 以下を /var/data/quiz.db のようなパスに設定する。
-      # Freeプランではディスクが揮発するため、再デプロイで履歴・セッションが消える点に注意。
-      # - key: DATABASE_PATH
-      #   value: /var/data/quiz.db
+      # データ永続化: 独立サービスの Render Postgres（下記 databases: 定義）へ接続する。
+      # DATABASE_URL が設定されていれば PostgreSQL、未設定なら従来どおり SQLite
+      # （ローカル開発・スモークテスト用）で動作する。
+      # Webサービスの再デプロイ・再起動でデータは消えない（DBが別サービスのため）。
+      - key: DATABASE_URL
+        fromDatabase:
+          name: visa-quiz-db
+          property: connectionString
       #
       # ※原本PDF（backend/source/visa_guide_v22_1.pdf）はリポジトリに含めない。
-      #   RAGをPDF根拠で動かす場合は、デプロイ後に手動配置するか Persistent Disk に置く。
+      #   RAGをPDF根拠で動かす場合は、デプロイ後に手動配置する。
       #   未配置でも観点要約（summary）を根拠に動作する。
+
+# データベース（Webサービスとは独立したサービスとして稼働。
+# Web側の再デプロイの影響を受けず、自動バックアップ付き）。
+# 注意: plan: free は作成から30日で期限切れになる試用品のため、本採用では有料プランにする。
+databases:
+  - name: visa-quiz-db
+    databaseName: visaquiz
+    user: visaquiz
+    region: singapore
+    plan: basic-256mb

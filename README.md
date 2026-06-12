@@ -53,10 +53,11 @@
 backend/
   main.py              アプリ組み立て（観点メタ + DBを起動時ロード）
   config.py            定数・環境変数（出題形式・出題範囲・閾値など）
-  db.py                SQLite。attempts / unit_progress / quiz_sessions
+  db.py                永続化（SQLite/PostgreSQL両対応）。attempts / unit_progress / quiz_sessions
   models.py            Pydantic スキーマ
   routes_quiz.py       RAG出題（ヘッド/テイル）・即時判定・採点・履歴・単元一覧
   routes_admin.py      管理系（受験者一覧＝進捗 / 個別履歴＝正答率）
+  routes_dev.py        デモデータ生成（DEV ONLY・撤去予定。冒頭に撤去手順を記載）
   rag_perspectives.py  観点メタのロード＆サンプリング
   rag_source.py        原本PDFのページテキスト供給（2-upレイアウト対応）
   rag_generator.py     観点→プロンプト（形式分岐）→LLM生成→JSON検証→リトライ
@@ -136,7 +137,9 @@ PDF未配置でも、観点メタの `summary`（原本に基づく事実要約�
 | `RAG_SESSION_TTL_SEC` | 7200 | セッション保持秒（既定2時間） |
 | `VISA_TYPE_UNITS` | b_visa,e_visa,f_visa,h1b_visa,j_visa,l_visa | 出題対象の単元（カンマ区切り） |
 | `ADMIN_TOKEN` | Kp7vQm2xRt | 管理画面トークン（`admin-<token>.html` と一致必須） |
-| `DATABASE_PATH` | backend/quiz.db | DBパス |
+| `DEMO_SEED_ENABLED` | true | デモデータ生成ボタン／APIの有効化（DEV ONLY・撤去予定。false で無効化） |
+| `DATABASE_URL` | （空） | PostgreSQL接続URL。**設定時はPostgreSQL**（本番想定・Render Postgres等）、未設定時はSQLite |
+| `DATABASE_PATH` | backend/quiz.db | SQLite時のDBパス（DATABASE_URL 未設定時のみ有効） |
 
 出題形式のレベル対応（`config.QUESTION_FORMAT_BY_LEVEL`）：初級=yesno / 中級=choice / 上級=fill_in。
 
@@ -153,6 +156,7 @@ PDF未配置でも、観点メタの `summary`（原本に基づく事実要約�
 | GET | `/api/history?username=` | 個人履歴 |
 | GET | `/api/{TOKEN}/admin/users` | 受験者一覧（名前＋単元別進捗・クリア数降順） |
 | GET | `/api/{TOKEN}/admin/history?username=` | 個別履歴（得点は返さず正答率のみ） |
+| GET/POST | `/api/dev/seed-demo` | デモデータ生成（DEV ONLY・撤去予定。GET=有効可否 / POST=生成実行） |
 
 ## 管理画面
 
@@ -178,3 +182,5 @@ PDF未配置でも、観点メタの `summary`（原本に基づく事実要約�
 - 生成問題は本番運用前に専門家レビューを推奨。
 - 認証はURL難読化のみ。社外公開時はBasic認証・IP制限・SSO等を追加すること（`TODO.md` 参照）。
 - 原本PDF・APIキー・DBはコミットしない（`.gitignore` 済み）。
+- 本番データは独立サービスの **Render Postgres** に保存する（`render.yaml` の `databases:` 定義）。
+  Webサービスの再デプロイ・再起動でデータは消えない。ローカル・スモークテストは従来どおりSQLiteで動く。

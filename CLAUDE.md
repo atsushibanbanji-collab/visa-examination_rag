@@ -21,14 +21,16 @@
 - `rag_perspectives`（観点ロード/サンプリング）→ `rag_source`（原本テキスト）→
   `rag_generator`（プロンプト構築・LLM呼び出し・JSON検証・リトライ・プロンプトキャッシュ）→
   `rag_session_store`（セッション保存）→ `routes_quiz`。
-- LLM呼び出しは `rag_generator.generate(..., llm_call=)` で差し替え可能（テストはモック注入）。
+- LLM呼び出しは `rag_generator.generate_questions(..., llm_call=)` で差し替え可能（テストはモック注入）。
 - 出題は `/api/rag/quiz/start`。採点・即時判定は `/api/quiz/check`・`/api/quiz/submit`
   （いずれも `session_id` 必須）。
 
 ## コード規約
 
 - コメント・docstring は日本語。エラーは `HTTPException` で 400/403/404/502/503。
-- DB操作は `db.py` 経由。フロントのDOM注入は `escapeHtml()` を通す。
+- DB操作は `db.py` 経由。db.py は SQLite / PostgreSQL 両対応（`DATABASE_URL` の有無で切替）。
+  SQL は `?` プレースホルダで書き、方言差は `_Conn` ラッパと明示分岐のみで吸収する。
+  フロントのDOM注入は `escapeHtml()` を通す。
 - 無音の劣化を避ける（観点/原本が無ければ適切なエラーを返す）。
 
 ## 動作確認
@@ -44,7 +46,8 @@ python -m venv .venv && .venv/Scripts/python -m pip install -r backend/requireme
 
 - RAG方式に卒業試験は無い（単元出題のみ）。
 - ハルシネーション対策の2パス検証（`RAG_VERIFY_PASS`）は枠のみ・既定off。
-- Render Free はディスク揮発 → 再デプロイで履歴・RAGセッションが消える（Persistent Disk推奨）。
+- 本番データは独立サービスの Render Postgres に保存（`DATABASE_URL`）。Web側の再デプロイで消えない。
+  `DATABASE_URL` 未設定時は SQLite（ローカル開発・スモーク用。Render Free のディスクは揮発する）。
 
 ## 成果物の命名規約
 

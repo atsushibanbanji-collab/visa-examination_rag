@@ -1,11 +1,14 @@
-"""SQLite永続化。最小構成。
-本番でデータを失いたくないなら、RenderのPersistent Diskをマウントし、
-環境変数 DATABASE_PATH に /var/data/quiz.db のようなパスを設定する。
+"""永続化層。SQLite / PostgreSQL 両対応。
+
+接続先は環境変数で決まる：
+  - DATABASE_URL（postgresql://...）があれば PostgreSQL（本番想定。Render Postgres 等）
+  - なければ SQLite（DATABASE_PATH、既定 backend/quiz.db。ローカル開発・スモークテスト用）
+
+SQL本文は共通（プレースホルダは ? で記述）とし、方言差は _Conn ラッパと
+init_db / 一部UPSERT文の分岐だけで吸収する。データの中身・関数の入出力は両方言で同一。
 
 このリポジトリは固定プール方式とRAG方式の比較用に新規DBを切ったため、
 最初から source 列（'pool' | 'rag'）を持たせて両方式の記録を分離できるようにしている。
-（既存リポジトリの「attempts無改修」制約は本番デプロイ保護のためのもので、
-  本リポジトリは新規DBにつき適用しない）
 """
 import json
 import os
@@ -14,6 +17,13 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+
+if IS_POSTGRES:
+    import psycopg
+    from psycopg.rows import dict_row
 
 DB_PATH = os.environ.get(
     "DATABASE_PATH",
@@ -25,7 +35,136 @@ SOURCE_POOL = "pool"
 SOURCE_RAG = "rag"
 
 
+class _Conn:
+    """sqlite3 / psycopg の差を吸収する薄いラッパ。
+
+    - SQL は ? プレースホルダで書き、PostgreSQL では %s へ変換して実行する
+      （本モジュールのSQLに文字 '?' のリテラルは存在しない前提。追加時は注意）。
+    - 行アクセスは両方言とも名前で可能（sqlite3.Row / psycopg dict_row）。
+    - execute の戻り値はカーソル（fetchone/fetchall/rowcount が共通で使える）。
+    """
+
+    def __init__(self, raw, is_pg: bool):
+        self.raw = raw
+        self.is_pg = is_pg
+
+    def execute(self, sql: str, params=()):
+        if self.is_pg:
+            sql = sql.replace("?", "%s")
+        return self.raw.execute(sql, params)
+
+
+@contextmanager
+def get_conn():
+    if IS_POSTGRES:
+        conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        try:
+            yield _Conn(conn, True)
+            conn.commit()
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield _Conn(conn, False)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+# ----------------------------------------------------------------------
+# スキーマ初期化（方言別DDL。テーブル・列・制約の意味は両方言で同一）
+# ----------------------------------------------------------------------
 def init_db() -> None:
+    if IS_POSTGRES:
+        _init_db_postgres()
+    else:
+        _init_db_sqlite()
+
+
+def _init_db_postgres() -> None:
+    conn = psycopg.connect(DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        # 受験履歴。source 列で固定プール / RAG を分離。
+        # 生成メタ（レイテンシ・トークン・観点id等）は details JSON に格納する。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attempts (
+                id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                username    TEXT    NOT NULL,
+                level       TEXT    NOT NULL,
+                source      TEXT    NOT NULL DEFAULT 'pool',
+                score       INTEGER NOT NULL,
+                total       INTEGER NOT NULL,
+                taken_at    TEXT    NOT NULL,
+                details     TEXT
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_username ON attempts(username)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_taken_at ON attempts(taken_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_source ON attempts(source)")
+
+        # 単元進捗。username × level × unit_id × source で一意。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS unit_progress (
+                id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                username      TEXT    NOT NULL,
+                level         TEXT    NOT NULL,
+                unit_id       TEXT    NOT NULL,
+                source        TEXT    NOT NULL DEFAULT 'pool',
+                streak_count  INTEGER NOT NULL DEFAULT 0,
+                best_streak   INTEGER NOT NULL DEFAULT 0,
+                perfect_count INTEGER NOT NULL DEFAULT 0,
+                last_taken_at TEXT,
+                graduated_at  TEXT,
+                UNIQUE (username, level, unit_id, source)
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_unit_progress_user_level "
+            "ON unit_progress(username, level, source)"
+        )
+        # 旧スキーマからの移行保険（PostgreSQL は IF NOT EXISTS が使える）
+        cur.execute(
+            "ALTER TABLE unit_progress ADD COLUMN IF NOT EXISTS perfect_count INTEGER NOT NULL DEFAULT 0"
+        )
+
+        # RAGの一時問題プール。正答・解説込みで session 単位に保持（フロントへは返さない）。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quiz_sessions (
+                session_id  TEXT PRIMARY KEY,
+                username    TEXT    NOT NULL,
+                level       TEXT    NOT NULL,
+                unit_id     TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                expires_at  TEXT    NOT NULL,
+                questions   TEXT    NOT NULL,
+                meta        TEXT,
+                pending     TEXT
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_quiz_sessions_expires "
+            "ON quiz_sessions(expires_at)"
+        )
+        cur.execute("ALTER TABLE quiz_sessions ADD COLUMN IF NOT EXISTS pending TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _init_db_sqlite() -> None:
     conn = sqlite3.connect(DB_PATH)
     try:
         cur = conn.cursor()
@@ -50,8 +189,6 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_source ON attempts(source)")
 
         # 単元進捗。username × level × unit_id × source で一意。
-        # source を一意キーに含めることで、固定プールとRAGの連続記録が
-        # 互いを汚染しないようにしている（比較の独立性確保）。
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS unit_progress (
@@ -72,9 +209,7 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_unit_progress_user_level "
             "ON unit_progress(username, level, source)"
         )
-        # 累計クリア方式用: 通算満点回数。満点を取った回数を通算で数え（外しても減らさない）、
-        # この値が閾値（既定3）に達するとそつぎょう（graduated_at 記録）。
-        # 既存DBにも安全に列を足す（無ければ追加、あれば何もしない）。
+        # 累計クリア方式用: 通算満点回数。既存DBにも安全に列を足す。
         up_cols = {
             r[1] for r in cur.execute("PRAGMA table_info(unit_progress)").fetchall()
         }
@@ -83,8 +218,7 @@ def init_db() -> None:
                 "ALTER TABLE unit_progress ADD COLUMN perfect_count INTEGER NOT NULL DEFAULT 0"
             )
 
-        # RAGの一時問題プール。生成した問題（正答・解説込み）を session 単位で保持。
-        # フロントへは正答・解説を返さず、採点時にこのテーブルから引く。
+        # RAGの一時問題プール。正答・解説込みで session 単位に保持（フロントへは返さない）。
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS quiz_sessions (
@@ -103,8 +237,7 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_quiz_sessions_expires "
             "ON quiz_sessions(expires_at)"
         )
-        # ヘッド／テイル分割用: テイル（残り問題）の未消化観点を保持する列。
-        # 既存DBにも安全に列を足す（無ければ追加、あれば何もしない）。
+        # ヘッド／テイル分割用: テイルの未消化観点を保持する列。既存DBにも安全に足す。
         existing_cols = {
             r[1] for r in cur.execute("PRAGMA table_info(quiz_sessions)").fetchall()
         }
@@ -115,24 +248,6 @@ def init_db() -> None:
         conn.close()
 
 
-@contextmanager
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _now_iso() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-
-# ----------------------------------------------------------------------
-# 受験履歴
-# ----------------------------------------------------------------------
 def save_attempt(
     username: str,
     level: str,
@@ -151,13 +266,16 @@ def save_attempt(
     ばらまく用途でのみ指定する。
     """
     with get_conn() as conn:
-        cur = conn.execute(
-            """
+        base_sql = """
             INSERT INTO attempts (username, level, source, score, total, taken_at, details)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (username, level, source, score, total, taken_at or _now_iso(), details),
-        )
+            """
+        params = (username, level, source, score, total, taken_at or _now_iso(), details)
+        if IS_POSTGRES:
+            # PostgreSQL に lastrowid は無いため RETURNING で採番値を受け取る
+            cur = conn.execute(base_sql.rstrip() + " RETURNING id", params)
+            return cur.fetchone()["id"]
+        cur = conn.execute(base_sql, params)
         return cur.lastrowid
 
 
@@ -287,15 +405,23 @@ def update_unit_progress(
         clear_streak_required = UNIT_CLEAR_REQUIRED_STREAK
 
     with get_conn() as conn:
-        # まず行を確保（無ければ作る）。INSERT OR IGNORE + 後続 UPDATE で UPSERT。
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO unit_progress
+        # まず行を確保（無ければ作る）。挿入の衝突無視は方言差があるため分岐する
+        # （SQLite: INSERT OR IGNORE / PostgreSQL: ON CONFLICT DO NOTHING）。
+        ensure_cols = """
               (username, level, unit_id, source, perfect_count, streak_count, best_streak, last_taken_at)
             VALUES (?, ?, ?, ?, 0, 0, 0, NULL)
-            """,
-            (username, level, unit_id, source),
-        )
+            """
+        if IS_POSTGRES:
+            conn.execute(
+                "INSERT INTO unit_progress" + ensure_cols
+                + " ON CONFLICT (username, level, unit_id, source) DO NOTHING",
+                (username, level, unit_id, source),
+            )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO unit_progress" + ensure_cols,
+                (username, level, unit_id, source),
+            )
 
         row = conn.execute(
             """
@@ -367,25 +493,39 @@ def save_quiz_session(
     """
     now = datetime.utcnow()
     expires = now + timedelta(seconds=ttl_sec)
+    cols_values = """
+          (session_id, username, level, unit_id, created_at, expires_at, questions, meta, pending)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+    params = (
+        session_id,
+        username,
+        level,
+        unit_id,
+        now.isoformat(timespec="seconds") + "Z",
+        expires.isoformat(timespec="seconds") + "Z",
+        json.dumps(questions, ensure_ascii=False),
+        json.dumps(meta, ensure_ascii=False),
+        json.dumps(pending, ensure_ascii=False) if pending is not None else None,
+    )
     with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO quiz_sessions
-              (session_id, username, level, unit_id, created_at, expires_at, questions, meta, pending)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                session_id,
-                username,
-                level,
-                unit_id,
-                now.isoformat(timespec="seconds") + "Z",
-                expires.isoformat(timespec="seconds") + "Z",
-                json.dumps(questions, ensure_ascii=False),
-                json.dumps(meta, ensure_ascii=False),
-                json.dumps(pending, ensure_ascii=False) if pending is not None else None,
-            ),
-        )
+        if IS_POSTGRES:
+            # 同一 session_id への再保存は全列を上書き（SQLite の INSERT OR REPLACE と同義）
+            conn.execute(
+                "INSERT INTO quiz_sessions" + cols_values
+                + """ ON CONFLICT (session_id) DO UPDATE SET
+                       username   = EXCLUDED.username,
+                       level      = EXCLUDED.level,
+                       unit_id    = EXCLUDED.unit_id,
+                       created_at = EXCLUDED.created_at,
+                       expires_at = EXCLUDED.expires_at,
+                       questions  = EXCLUDED.questions,
+                       meta       = EXCLUDED.meta,
+                       pending    = EXCLUDED.pending""",
+                params,
+            )
+        else:
+            conn.execute("INSERT OR REPLACE INTO quiz_sessions" + cols_values, params)
 
 
 def update_quiz_session_questions(
