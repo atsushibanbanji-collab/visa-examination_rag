@@ -46,7 +46,6 @@
   <script src="/assets/common.js"></script>
   <script>
     const params = new URLSearchParams(location.search);
-    const username = (params.get("user") || "").trim();
     const level = params.get("level") || "beginner";
 
     const loadingEl = document.getElementById("loading");
@@ -65,23 +64,24 @@
 
     // escapeHtml / levelLabel は common.js に共通化
 
-    if (!username) {
-      showError("受験者名が指定されていません。トップから開始してください。");
-    } else {
-      userLabel.textContent = `受験者：${username}（${levelLabel(level)}）`;
-      document.getElementById("back-link").href = "/";
-      load();
-    }
+    document.getElementById("back-link").href = "/";
+    load();
 
     async function load() {
       try {
-        const p = new URLSearchParams({ level, user: username });
+        const p = new URLSearchParams({ level });
         const res = await fetch(`/api/rag/units?${p.toString()}`);
+        if (res.status === 401) {
+          // 未ログイン → トップ（ログイン画面）へ
+          location.href = "/";
+          return;
+        }
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
         const data = await res.json();
+        userLabel.textContent = `受験者：${data.username}（${levelLabel(level)}）`;
         render(data);
         loadingEl.style.display = "none";
         contentEl.style.display = "block";
@@ -139,13 +139,13 @@
           <p class="unit-meta">${u.questions_per_quiz}問生成 / 観点 ${u.perspective_count}件</p>
           <div class="streak-row">
             <div class="streak-dots">${dots}</div>
-            <span class="streak-text">通算満点 ${perfectCount} / ${required}</span>
+            <span class="streak-text">${perfectCount} / ${required}</span>
           </div>
           ${lastText}
         `;
         if (u.playable) {
           card.addEventListener("click", () => {
-            const p = new URLSearchParams({ user: username, level, unit: u.id });
+            const p = new URLSearchParams({ level, unit: u.id });
             location.href = `/quiz.html?${p.toString()}`;
           });
         }

@@ -75,31 +75,53 @@
     const rows = users.map((u) => {
       const chips = (u.units || []).map(progressChip).join(" ");
       return `<tr>
-        <td><button type="button" class="user-link" data-user="${escapeHtml(u.username)}">${escapeHtml(u.username)}</button></td>
+        <td><button type="button" class="user-link" data-user-id="${u.user_id}" data-user="${escapeHtml(u.username)}">${escapeHtml(u.username)}</button>
+            <div class="muted" style="font-size: 11px;">${escapeHtml(u.email)}</div></td>
         <td class="cleared-num">${u.cleared_count}</td>
         <td class="last-taken">${u.last_taken_at ? fmtDate(u.last_taken_at) : '<span class="muted">−</span>'}</td>
         <td class="prog-cell">${chips || '<span class="muted">進捗なし</span>'}</td>
+        <td><button type="button" class="btn btn-secondary pw-reset" data-user-id="${u.user_id}" data-user="${escapeHtml(u.username)}"
+              style="padding: 4px 8px; font-size: 12px; white-space: nowrap;">PW再設定</button></td>
       </tr>`;
     }).join("");
     usersArea.innerHTML = `
       <table class="data">
-        <thead><tr><th>受験者名</th><th>クリア単元数</th><th>直近の受験</th><th>単元別進捗</th></tr></thead>
+        <thead><tr><th>受験者</th><th>クリア単元数</th><th>直近の受験</th><th>単元別進捗</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     `;
     usersArea.querySelectorAll(".user-link").forEach((btn) => {
-      btn.addEventListener("click", () => loadHistory(btn.dataset.user));
+      btn.addEventListener("click", () => loadHistory(btn.dataset.userId, btn.dataset.user));
+    });
+    // パスワード再設定（メール送信基盤なし＝管理者が新パスワードを決めて本人へ伝える運用）
+    usersArea.querySelectorAll(".pw-reset").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const newPw = prompt(`${btn.dataset.user} さんの新しいパスワード（8文字以上）を入力してください：`);
+        if (newPw === null) return;
+        if (newPw.length < 8) { alert("8文字以上にしてください。"); return; }
+        try {
+          const res = await fetch(`/api/${ADMIN_TOKEN}/admin/users/${btn.dataset.userId}/password`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ new_password: newPw }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "再設定に失敗しました");
+          alert(`再設定しました。新しいパスワードを ${btn.dataset.user} さんへ伝えてください。\n（本人の既存ログインは全て無効になります）`);
+        } catch (e) {
+          alert("失敗: " + e.message);
+        }
+      });
     });
   }
 
-  async function loadHistory(username) {
+  async function loadHistory(userId, displayName) {
     historyCard.style.display = "block";
-    historyTitle.textContent = `受験履歴：${username}`;
+    historyTitle.textContent = `受験履歴：${displayName}`;
     historyArea.innerHTML = '<div class="loading">読み込み中…</div>';
     historyCard.scrollIntoView({ behavior: "smooth", block: "start" });
     try {
       const data = await fetchJson(
-        `/api/${ADMIN_TOKEN}/admin/history?username=${encodeURIComponent(username)}`
+        `/api/${ADMIN_TOKEN}/admin/history?user_id=${encodeURIComponent(userId)}`
       );
       renderHistory(data.attempts || [], data.required || 3);
     } catch (e) {

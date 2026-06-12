@@ -12,9 +12,13 @@
    `rag_source.text_for_pages()` がこの変換を担う。
 4. **原本PDF・APIキー・DBはコミットしない**（`.gitignore` 済み・著作権/秘密情報）。
    原本未配置時は観点summaryを根拠にフォールバック（`grounding=summary`）。
-5. **進捗は (username, level, unit_id, source) で一意。** `source` 列は残してあるが本リポジトリ
+5. **進捗は (username, level, unit_id, source) で一意。** 認証導入後、username 列には
+   **メールアドレス（UNIQUE）** を入れて一意性を保ち、本人への紐付けは user_id 列で行う
+   （旧・氏名運用のデータは user_id NULL のまま残置＝壊さず足す方針）。`source` は本リポジトリ
    では常に `'rag'`。10問満点を**通算3回**で単元クリア（累計方式。外しても減らない。
    `unit_progress.perfect_count` で管理。連続満点数 `streak_count` は情報用で判定には使わない）。
+6. **受験系・履歴・マイページはログイン必須（Cookieセッション）。** ユーザーの特定は
+   `auth.get_current_user`（FastAPI依存）経由のみ。リクエストボディで username を受けない。
 
 ## アーキテクチャ要点
 

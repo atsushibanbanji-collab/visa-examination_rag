@@ -64,6 +64,15 @@ def chk(cond, label):
         ng.append(label)
 
 
+# ============ 認証（メール＋パスワード） ============
+# 未ログインは401
+_pre = c.get("/api/rag/units?level=beginner")
+_me0 = c.get("/api/auth/me")
+
+reg = c.post("/api/auth/register",
+             json={"email": "RagUser@Example.com", "password": "pass1234", "display_name": "ラグ太郎"})
+me = c.get("/api/auth/me").json() if reg.status_code == 200 else {}
+
 # ============ RAG出題 ============
 cells = c.get("/api/rag/cells").json()
 chk(len(cells["cells"]) == 18, "[rag] cells 18件（ビザ種別6単元×初中上3レベル）")
@@ -71,20 +80,33 @@ chk(all(x["unit_id"] in {"b_visa","e_visa","f_visa","h1b_visa","j_visa","l_visa"
     "[rag] cells: ビザ種別単元のみ（永住権・基本は除外）")
 chk(cells["source_available"] is True, "[rag] 原本PDF利用可能")
 
-ru = c.get("/api/rag/units?level=beginner&user=raguser").json()
+chk(_pre.status_code == 401 and _me0.status_code == 401, "[auth] 未ログインは401")
+chk(reg.status_code == 200 and me.get("display_name") == "ラグ太郎"
+    and me.get("email") == "raguser@example.com",
+    "[auth] 登録→Cookieセッション発行→me取得（メールは小文字正規化）")
+chk(c.post("/api/auth/register",
+           json={"email": "raguser@example.com", "password": "pass1234",
+                 "display_name": "二重"}).status_code == 409,
+    "[auth] メール重複登録は409")
+chk(c.post("/api/auth/login",
+           json={"email": "raguser@example.com", "password": "WRONG"}).status_code == 401,
+    "[auth] パスワード誤りは401")
+
+ru = c.get("/api/rag/units?level=beginner").json()
 chk(len(ru["units"]) == 6, "[rag] beginner units 6件（ビザ種別のみ）")
+chk(ru.get("username") == "ラグ太郎", "[auth] units応答はログイン中の表示名")
 chk(all(u["id"] != "green_card" for u in ru["units"]), "[rag] units: 永住権が一覧に出ない")
 # 中級・上級にもビザ種別6単元が入った（answer形式で難度を制御）
-chk(len(c.get("/api/rag/units?level=intermediate&user=raguser").json()["units"]) == 6,
+chk(len(c.get("/api/rag/units?level=intermediate").json()["units"]) == 6,
     "[rag] intermediate units 6件")
-chk(len(c.get("/api/rag/units?level=advanced&user=raguser").json()["units"]) == 6,
+chk(len(c.get("/api/rag/units?level=advanced").json()["units"]) == 6,
     "[rag] advanced units 6件")
 # 除外単元への start 直打ちは 404（バックエンドの関所）
 chk(c.post("/api/rag/quiz/start",
-           json={"username": "raguser", "level": "beginner", "unit": "green_card"}).status_code == 404,
+           json={"level": "beginner", "unit": "green_card"}).status_code == 404,
     "[rag] start: 除外単元(green_card)は404")
 
-start = c.post("/api/rag/quiz/start", json={"username": "raguser", "level": "beginner", "unit": "b_visa"}).json()
+start = c.post("/api/rag/quiz/start", json={"level": "beginner", "unit": "b_visa"}).json()
 sid = start.get("session_id")
 chk(sid is not None, "[rag] start: session_id発行")
 chk(len(start["questions"]) == 3, "[rag] start: ヘッド3問のみ返す")
@@ -128,7 +150,7 @@ chk(ck_tail.get("is_correct") is True, "[rag] check: テイル末尾問題も判
 
 # 採点 → 通算満点 +1（全10問）
 rag_answers = [{"id": q["id"], "choice": 0} for q in all_q]
-rs = c.post("/api/quiz/submit", json={"username": "raguser", "level": "beginner", "unit": "b_visa",
+rs = c.post("/api/quiz/submit", json={"level": "beginner", "unit": "b_visa",
             "session_id": sid, "answers": rag_answers}).json()
 chk(rs["score"] == 10 and rs["passed"] is True, "[rag] submit: 満点")
 chk(rs["unit_progress"]["perfect_count"] == 1 and rs["unit_progress"]["streak_count"] == 1,
@@ -152,17 +174,17 @@ chk(r5["perfect_count"] == 4 and r5["newly_cleared"] is False,
     "[cum] クリア後は newly_cleared が立たない")
 
 # session_id 無しの submit は 422（必須フィールド）
-bad = c.post("/api/quiz/submit", json={"username": "x", "level": "beginner", "unit": "b_visa",
+bad = c.post("/api/quiz/submit", json={"level": "beginner", "unit": "b_visa",
              "answers": [{"id": "a", "choice": 0}]})
 chk(bad.status_code == 422, "[rag] submit: session_id必須(422)")
 
 # 不正 session は 404
-bad2 = c.post("/api/quiz/submit", json={"username": "x", "level": "beginner", "unit": "b_visa",
+bad2 = c.post("/api/quiz/submit", json={"level": "beginner", "unit": "b_visa",
               "session_id": "sess_nope", "answers": [{"id": "sess_nope#0", "choice": 0}]})
 chk(bad2.status_code == 404, "[rag] 不正sessionは404")
 
-# 履歴に source=rag
-hist = c.get("/api/history?username=raguser").json()["attempts"]
+# 履歴に source=rag（Cookieベース＝ログイン中ユーザー自身の履歴）
+hist = c.get("/api/history").json()["attempts"]
 chk(any(a["source"] == "rag" for a in hist), "[history] source=rag が記録される")
 
 # ============ 項目5: レベル別出題形式 ============
@@ -209,7 +231,7 @@ ck_ng = c.post("/api/quiz/check",
 chk(ck_ng["is_correct"] is False, "[fmt] 上級check: 候補外は不正解")
 # submit（全問 variants で回答 → 満点）
 adv_answers = [{"id": q["id"], "text_answers": ["日米条約"]} for q in adv_session["questions"]]
-ars = c.post("/api/quiz/submit", json={"username": "advuser", "level": "advanced",
+ars = c.post("/api/quiz/submit", json={"level": "advanced",
              "unit": "basics", "session_id": asid, "answers": adv_answers}).json()
 chk(ars["score"] == len(adv_session["questions"]) and ars["score"] > 0,
     "[fmt] 上級submit: 穴埋めで満点採点")
@@ -225,41 +247,40 @@ chk(rag_session_store.grade_answer(q_multi, text_answers=["甲"])["is_correct"] 
 
 # 中級・上級も実API（start）経路で形式を確認（単元データを追加したため到達可能になった）
 istart = c.post("/api/rag/quiz/start",
-                json={"username": "mid", "level": "intermediate", "unit": "e_visa"}).json()
+                json={"level": "intermediate", "unit": "e_visa"}).json()
 chk(istart["questions"][0].get("type") == "choice" and len(istart["questions"][0]["choices"]) == 3,
     "[fmt] 中級start: choice型・3択")
 chk(istart["gen_metrics"].get("format") == "choice", "[fmt] 中級start: format=choice")
 
 astart = c.post("/api/rag/quiz/start",
-                json={"username": "adv", "level": "advanced", "unit": "e_visa"}).json()
+                json={"level": "advanced", "unit": "e_visa"}).json()
 chk(astart["questions"][0].get("type") == "fill_in" and astart["questions"][0].get("blank_count", 0) >= 1,
     "[fmt] 上級start: fill_in型・blank_count付き")
 chk("choices" not in astart["questions"][0], "[fmt] 上級start: 公開問題にchoices無し")
 chk(astart["gen_metrics"].get("format") == "fill_in", "[fmt] 上級start: format=fill_in")
 
-# ============ 項目6: テストモード（構築段階＝記録する。名前トリガー併存） ============
-tstart = c.post("/api/rag/quiz/start",
-                json={"username": "tester", "level": "beginner", "unit": "b_visa", "test": True}).json()
-chk(tstart.get("test") is True and tstart.get("total_questions") == 2,
-    "[test] start: test=true・出題2問")
-chk(tstart.get("pending_count") == 0, "[test] start: テイル無し（2問はヘッドで完結）")
-chk(tstart["gen_metrics"].get("grounding") == "test" and tstart["gen_metrics"].get("test") is True,
-    "[test] start: 原本非参照（grounding=test）・経路は本番同一")
-tsid = tstart["session_id"]
-# 構築段階: テストモードでも記録する（管理画面の確認用）
-tans = [{"id": q["id"], "choice": 0} for q in tstart["questions"]]
-tres = c.post("/api/quiz/submit", json={"username": "tester", "level": "beginner",
-              "unit": "b_visa", "session_id": tsid, "answers": tans}).json()
-chk(tres.get("test") is True and tres.get("attempt_id") is not None and tres.get("unit_progress") is not None,
-    "[test] submit: 記録する（attempt_id/progress あり）")
-chk(len(c.get("/api/history?username=tester").json()["attempts"]) >= 1,
-    "[test] submit: 履歴に残る")
+# ============ 項目6: 認証ライフサイクル（テストモードは撤去済み） ============
+# startリクエストの test フィールドは受け付けない（撤去確認: 余剰フィールドは無視され通常10問）
+xt = c.post("/api/rag/quiz/start", json={"level": "beginner", "unit": "b_visa", "test": True}).json()
+chk(xt.get("total_questions") == 10 and "test" not in xt,
+    "[auth] テストモード撤去: test指定は無効・常に通常出題")
 
-# 名前トリガー: username が「テストモード」なら ?test なしでも発動
-ntstart = c.post("/api/rag/quiz/start",
-                 json={"username": "テストモード", "level": "beginner", "unit": "b_visa"}).json()
-chk(ntstart.get("test") is True and ntstart.get("total_questions") == 2,
-    "[test] 名前『テストモード』で ?test なしでも発動")
+# パスワード自己変更 → 全セッション失効 → 旧パスワード不可・新パスワード可
+pw = c.post("/api/auth/password",
+            json={"current_password": "pass1234", "new_password": "newpass5678"}).json()
+chk(pw.get("relogin_required") is True and c.get("/api/auth/me").status_code == 401,
+    "[auth] パスワード変更で全セッション失効")
+chk(c.post("/api/auth/login",
+           json={"email": "raguser@example.com", "password": "pass1234"}).status_code == 401,
+    "[auth] 旧パスワードは無効")
+chk(c.post("/api/auth/login",
+           json={"email": "raguser@example.com", "password": "newpass5678"}).status_code == 200,
+    "[auth] 新パスワードでログイン可")
+
+# ログアウト → 401
+c.post("/api/auth/logout")
+chk(c.get("/api/auth/me").status_code == 401, "[auth] ログアウトで401")
+c.post("/api/auth/login", json={"email": "raguser@example.com", "password": "newpass5678"})
 
 # ============ 固定プール方式の経路が消えたこと ============
 chk(c.get("/api/levels").status_code == 404, "[gone] /api/levels が404")
@@ -274,25 +295,35 @@ chk(c.get(f"/api/{T}/admin/questions/export?level=all").status_code == 404, "[go
 # 旧・全件履歴エンドポイントは廃止
 chk(c.get(f"/api/{T}/admin/attempts").status_code == 404, "[admin] 旧 attempts 一覧は廃止(404)")
 
-# users: 名前＋単元別進捗＋クリア数。クリア数降順・同数は名前昇順
+# users: アカウント（表示名＋メール）＋単元別進捗＋クリア数。クリア数降順・同数は名前昇順
 au = c.get(f"/api/{T}/admin/users").json()
 chk("users" in au and isinstance(au["users"], list), "[admin] users: 一覧を返す")
-rag_u = next((u for u in au["users"] if u["username"] == "raguser"), None)
-chk(rag_u is not None and "cleared_count" in rag_u and "units" in rag_u,
-    "[admin] users: 受験者ごとに cleared_count と units を持つ")
+rag_u = next((u for u in au["users"] if u["email"] == "raguser@example.com"), None)
+chk(rag_u is not None and "cleared_count" in rag_u and "units" in rag_u
+    and "user_id" in rag_u and rag_u["username"] == "ラグ太郎",
+    "[admin] users: アカウント単位（user_id・表示名・メール）で一覧化")
 chk(all("perfect_count" in x and "cleared" in x and "unit_name" in x for x in rag_u["units"]),
-    "[admin] users: 単元別進捗（通算満点・クリア状況・単元名）")
+    "[admin] users: 単元別進捗（満点回数・クリア状況・単元名）")
 # ソート: cleared_count 降順、同数は名前昇順
 ccs = [u["cleared_count"] for u in au["users"]]
 chk(ccs == sorted(ccs, reverse=True), "[admin] users: クリア数の降順で並ぶ")
 
-# history: 得点を返さず正答率(pct)のみ。日時・単元・レベルは残す
-ah = c.get(f"/api/{T}/admin/history?username=raguser").json()
+# history: user_id指定。得点を返さず正答率(pct)のみ。日時・単元・レベルは残す
+ah = c.get(f"/api/{T}/admin/history?user_id={rag_u['user_id']}").json()
 chk(ah["attempts"] and all("pct" in x for x in ah["attempts"]), "[admin] history: 正答率(pct)を返す")
 chk(all("score" not in x and "total" not in x for x in ah["attempts"]),
     "[admin] history: 得点(score/total)は返さない")
 chk(all(("taken_at" in x and "level" in x) for x in ah["attempts"]),
     "[admin] history: 日時・レベルは残す")
+# 管理者によるパスワード再設定 → 本人セッション失効・新パスワードでログイン可
+pr = c.post(f"/api/{T}/admin/users/{rag_u['user_id']}/password",
+            json={"new_password": "admin-reset-1"})
+from fastapi.testclient import TestClient as _TC
+c_re = _TC(app)
+chk(pr.status_code == 200
+    and c_re.post("/api/auth/login",
+                  json={"email": "raguser@example.com", "password": "admin-reset-1"}).status_code == 200,
+    "[admin] パスワード再設定: 新パスワードでログイン可")
 # トークン不一致は404
 chk(c.get("/api/wrongtoken/admin/users").status_code == 404, "[admin] 不正トークンは404")
 

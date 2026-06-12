@@ -14,15 +14,14 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend import db
+from backend import auth, db
 from backend import rag_generator, rag_perspectives, rag_session_store, rag_source
 from backend.config import (
     ALLOWED_LEVELS,
     RAG_HEAD_COUNT,
     RAG_QUESTIONS_PER_QUIZ,
-    RAG_TEST_QUESTIONS,
     UNIT_CLEAR_REQUIRED_STREAK,
     VISA_TYPE_UNITS,
 )
@@ -66,20 +65,17 @@ def rag_cells():
 @router.get("/api/rag/units")
 def rag_units(
     level: str = Query(..., description="beginner / intermediate / advanced"),
-    user: str = Query(..., min_length=1, max_length=50),
+    user: dict = Depends(auth.get_current_user),
 ):
-    """単元一覧。プールサイズの代わりに観点数を表示し、進捗を返す。"""
+    """単元一覧。プールサイズの代わりに観点数を表示し、進捗を返す（ログイン必須）。"""
     if level not in ALLOWED_LEVELS:
         raise HTTPException(400, f"level は {','.join(ALLOWED_LEVELS)} のいずれか。")
-    username = user.strip()
-    if not username:
-        raise HTTPException(400, "user が空です。")
 
     cells = [c for c in _offered_cells() if c["level"] == level]
     if not cells:
         raise HTTPException(404, f"このレベルには出題対象の単元がありません: {level}")
 
-    progress_map = db.get_progress_map_for_user(username, level, source=SOURCE_RAG)
+    progress_map = db.get_progress_map_by_user_id(user["id"], level, source=SOURCE_RAG)
     units_out = []
     for c in cells:
         unit_id = c["unit_id"]
@@ -105,14 +101,14 @@ def rag_units(
         )
     return {
         "level": level,
-        "username": username,
+        "username": user["display_name"],
         "units": units_out,
         "source_available": rag_source.is_available(),
     }
 
 
 @router.post("/api/rag/quiz/start")
-def rag_quiz_start(req: RagStartRequest):
+def rag_quiz_start(req: RagStartRequest, user: dict = Depends(auth.get_current_user)):
     """RAG出題（ヘッド）: 観点サンプリング → 先頭 RAG_HEAD_COUNT 問だけ生成して即返す。
 
     残り（テイル）は未消化観点としてセッションに保持し、/api/rag/quiz/continue で
@@ -120,9 +116,6 @@ def rag_quiz_start(req: RagStartRequest):
     """
     if req.level not in ALLOWED_LEVELS:
         raise HTTPException(400, f"level は {','.join(ALLOWED_LEVELS)} のいずれか。")
-    username = req.username.strip()
-    if not username:
-        raise HTTPException(400, "user が空です。")
     if req.unit not in VISA_TYPE_UNITS:
         # 出題対象外（永住権・ビザの基本など）。URL直打ち等での到達を塞ぐ。
         # データは保持しているが、当面は出題しない。
@@ -131,16 +124,8 @@ def rag_quiz_start(req: RagStartRequest):
         raise HTTPException(404, f"観点メタがありません: level={req.level}, unit={req.unit}")
 
     # 観点は最初に全数サンプリング（LLM不要）。ヘッド／テイルに分割する。
-    # --- TEST MODE（撤去予定）---------------------------------------------------
-    # テストモードでは出題数を絞り、原本非参照のダミーを生成する（経路は本番同一）。
-    # 起動: ?test=1 のほか、受験者名が「テストモード」でも発動する（?test 載せ忘れ対策）。
-    # 注意: 「テストモード」という氏名による起動は氏名識別（認証化で廃止予定）に依存。
-    #       撤去はテストモード→認証化の順で行うこと（TODO.md の撤去手順参照）。
-    is_test = req.test or username == "テストモード"
-    total_n = RAG_TEST_QUESTIONS if is_test else RAG_QUESTIONS_PER_QUIZ
-    # --- /TEST MODE -------------------------------------------------------------
     perspectives, seed = rag_perspectives.sample_perspectives(
-        req.level, req.unit, total_n
+        req.level, req.unit, RAG_QUESTIONS_PER_QUIZ
     )
     if not perspectives:
         raise HTTPException(502, f"観点が0件です: level={req.level}, unit={req.unit}")
@@ -149,7 +134,7 @@ def rag_quiz_start(req: RagStartRequest):
 
     try:
         gen = rag_generator.generate_questions(
-            req.level, req.unit, head, seed=seed, test_mode=is_test
+            req.level, req.unit, head, seed=seed
         )
     except rag_generator.RAGGenerationError as e:
         msg = str(e)
@@ -158,7 +143,7 @@ def rag_quiz_start(req: RagStartRequest):
         raise HTTPException(502, f"RAG出題の生成に失敗しました: {msg}")
 
     session = rag_session_store.create_session(
-        username=username,
+        username=user["email"],  # セッション帰属の識別はメール（UNIQUE）で行う
         level=req.level,
         unit_id=req.unit,
         questions=gen["questions"],
@@ -173,7 +158,6 @@ def rag_quiz_start(req: RagStartRequest):
         "total_questions": len(perspectives),
         "head_count": len(head),
         "pending_count": len(tail),
-        "test": is_test,
         "gen_metrics": gen["metrics"],
     }
 
@@ -263,10 +247,7 @@ def check_answer(req: CheckRequest):
 
 
 @router.post("/api/quiz/submit")
-def submit_quiz(req: SubmitRequest):
-    username = req.username.strip()
-    if not username:
-        raise HTTPException(400, "ユーザー名が必要")
+def submit_quiz(req: SubmitRequest, user: dict = Depends(auth.get_current_user)):
     if req.level not in ALLOWED_LEVELS:
         raise HTTPException(400, f"level は {','.join(ALLOWED_LEVELS)} のいずれか。")
     if not req.session_id:
@@ -311,13 +292,6 @@ def submit_quiz(req: SubmitRequest):
     if total == 0:
         raise HTTPException(400, "有効な解答がない")
 
-    # --- TEST MODE（撤去予定）---------------------------------------------------
-    # 構築段階では、テストモードの受験も履歴・進捗に記録する（管理画面の動作確認用）。
-    # 後で識別・除外できるよう、details の meta に test フラグを残す。
-    # 撤去時: is_test を False 固定にせず、この行と details の test キーごと削除する。
-    is_test = bool(session_meta.get("test"))
-    # --- /TEST MODE -------------------------------------------------------------
-
     # 履歴を保存。単元情報・生成メタは details JSON 内の meta に格納する。
     details_payload = json.dumps(
         {
@@ -325,7 +299,6 @@ def submit_quiz(req: SubmitRequest):
                 "unit": req.unit,
                 "is_graduation": False,
                 "source": SOURCE_RAG,
-                "test": is_test,
                 "metrics": session_meta,
             },
             "answers": [
@@ -341,13 +314,15 @@ def submit_quiz(req: SubmitRequest):
         },
         ensure_ascii=False,
     )
+    # username 列にはメール（UNIQUE）を入れて互換を保ち、本流の紐付けは user_id で行う
     attempt_id = db.save_attempt(
-        username=username,
+        username=user["email"],
         level=req.level,
         score=score,
         total=total,
         details=details_payload,
         source=SOURCE_RAG,
+        user_id=user["id"],
     )
 
     # 単元進捗を更新（満点で連続+1、非満点で0リセット）
@@ -355,14 +330,15 @@ def submit_quiz(req: SubmitRequest):
     if req.unit:
         perfect = score == total
         unit_progress = db.update_unit_progress(
-            username, req.level, req.unit, perfect,
+            user["email"], req.level, req.unit, perfect,
             clear_streak_required=UNIT_CLEAR_REQUIRED_STREAK,  # 閾値の真実源は config に一本化
             source=SOURCE_RAG,
+            user_id=user["id"],
         )
 
     return {
         "attempt_id": attempt_id,
-        "username": username,
+        "username": user["display_name"],
         "level": req.level,
         "unit": req.unit,
         "score": score,
@@ -370,14 +346,14 @@ def submit_quiz(req: SubmitRequest):
         "passed": score == total,
         "required_streak": UNIT_CLEAR_REQUIRED_STREAK,
         "unit_progress": unit_progress,
-        "test": is_test,
         "results": results,
     }
 
 
 @router.get("/api/history")
-def get_history(username: str):
-    username = username.strip()
-    if not username:
-        raise HTTPException(400, "ユーザー名が必要")
-    return {"username": username, "attempts": db.get_history_for_user(username)}
+def get_history(user: dict = Depends(auth.get_current_user)):
+    """ログイン中ユーザー自身の受験履歴（マイページ・結果画面用）。"""
+    return {
+        "username": user["display_name"],
+        "attempts": db.get_history_by_user_id(user["id"]),
+    }

@@ -10,7 +10,6 @@ class Answer(BaseModel):
 
 
 class SubmitRequest(BaseModel):
-    username: str = Field(..., min_length=1, max_length=50)
     level: str
     unit: Optional[str] = None  # 単元ID
     answers: List[Answer]
@@ -29,10 +28,8 @@ class CheckRequest(BaseModel):
 
 class RagStartRequest(BaseModel):
     """RAG出題の開始リクエスト。観点をサンプリングしてLLMで生成する。"""
-    username: str = Field(..., min_length=1, max_length=50)
     level: str
     unit: str
-    test: bool = False  # TEST MODE（撤去予定）: テストモード起動フラグ（2問・原本非参照のダミー）
 
 
 class RagContinueRequest(BaseModel):

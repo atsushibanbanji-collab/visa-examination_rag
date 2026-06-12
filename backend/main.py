@@ -17,6 +17,7 @@ from backend import db
 from backend import rag_perspectives
 from backend.config import FRONTEND_DIR
 from backend.routes_admin import router as admin_router
+from backend.routes_auth import router as auth_router
 from backend.routes_dev import router as dev_router  # DEV ONLY（撤去予定）
 from backend.routes_quiz import router as quiz_router
 
@@ -37,6 +38,7 @@ db.init_db()              # SQLite スキーマ初期化
 # --- ルーター登録 ---
 app.include_router(quiz_router)
 app.include_router(admin_router)
+app.include_router(auth_router)
 app.include_router(dev_router)  # DEV ONLY（撤去予定）: デモデータ生成
 
 # --- フロントの静的配信（必ず最後にマウント）---

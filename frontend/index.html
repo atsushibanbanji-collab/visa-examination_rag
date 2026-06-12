@@ -27,11 +27,36 @@
       </div>
     </header>
 
-    <section class="card">
-      <h2>受験者情報</h2>
-      <p class="muted">受験者名を入力してください。同じ名前で再受験すると単元別の連続記録がまとまります。</p>
-      <label for="username">受験者名</label>
-      <input type="text" id="username" placeholder="例：田中太郎" maxlength="50" autocomplete="off">
+    <!-- ログイン中バー（未ログイン時は非表示） -->
+    <section class="card" id="account-bar" hidden>
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <span id="account-name" style="font-weight: 600;"></span>
+        <span>
+          <a href="/mypage.html" class="btn btn-secondary" style="text-decoration: none; padding: 6px 12px; font-size: 13px;">マイページ</a>
+          <button type="button" id="logout-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">ログアウト</button>
+        </span>
+      </div>
+    </section>
+
+    <!-- 認証カード（ログイン／新規登録。ログイン中は非表示） -->
+    <section class="card" id="auth-card">
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <button type="button" class="btn" id="tab-login">ログイン</button>
+        <button type="button" class="btn btn-secondary" id="tab-register">新規登録</button>
+      </div>
+      <div id="auth-fields">
+        <label for="auth-email">メールアドレス</label>
+        <input type="email" id="auth-email" maxlength="254" autocomplete="username">
+        <label for="auth-password" style="margin-top: 8px; display: block;">パスワード</label>
+        <input type="password" id="auth-password" maxlength="128" autocomplete="current-password">
+        <div id="register-only" hidden>
+          <label for="auth-display-name" style="margin-top: 8px; display: block;">表示名（管理画面・結果に表示される名前）</label>
+          <input type="text" id="auth-display-name" maxlength="50" autocomplete="off" placeholder="例：田中太郎">
+          <p class="muted" style="margin-top: 6px;">パスワードは8文字以上。</p>
+        </div>
+        <p class="muted" id="auth-error" style="color: var(--danger); margin-top: 8px;" hidden></p>
+        <button type="button" class="btn" id="auth-submit" style="margin-top: 12px;">ログイン</button>
+      </div>
     </section>
 
     <section class="card">
@@ -43,43 +68,105 @@
   </div>
 
   <script>
-    const usernameInput = document.getElementById("username");
     const levelGrid = document.getElementById("level-grid");
+    const accountBar = document.getElementById("account-bar");
+    const accountName = document.getElementById("account-name");
+    const authCard = document.getElementById("auth-card");
+    const authError = document.getElementById("auth-error");
 
     const LEVEL_NAMES = { beginner: "初級", intermediate: "中級", advanced: "上級" };
     const LEVEL_ORDER = ["beginner", "intermediate", "advanced"];
 
     let levels = [];
+    let loggedIn = false;
+    let authMode = "login"; // "login" | "register"
 
-    const savedName = localStorage.getItem("visa_quiz_username");
-    if (savedName) usernameInput.value = savedName;
+    // --- 認証UI ---
+    function setAuthMode(mode) {
+      authMode = mode;
+      document.getElementById("register-only").hidden = mode !== "register";
+      document.getElementById("auth-submit").textContent = mode === "login" ? "ログイン" : "登録して始める";
+      document.getElementById("tab-login").className = mode === "login" ? "btn" : "btn btn-secondary";
+      document.getElementById("tab-register").className = mode === "register" ? "btn" : "btn btn-secondary";
+      authError.hidden = true;
+    }
+    document.getElementById("tab-login").addEventListener("click", () => setAuthMode("login"));
+    document.getElementById("tab-register").addEventListener("click", () => setAuthMode("register"));
 
-    function hasName() {
-      return usernameInput.value.trim().length > 0;
+    async function submitAuth() {
+      const email = document.getElementById("auth-email").value.trim();
+      const password = document.getElementById("auth-password").value;
+      authError.hidden = true;
+      try {
+        let res;
+        if (authMode === "register") {
+          const displayName = document.getElementById("auth-display-name").value.trim();
+          res = await fetch("/api/auth/register", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password, display_name: displayName }),
+          });
+        } else {
+          res = await fetch("/api/auth/login", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "失敗しました");
+        applyLogin(data);
+      } catch (e) {
+        authError.textContent = e.message;
+        authError.hidden = false;
+      }
+    }
+    document.getElementById("auth-submit").addEventListener("click", submitAuth);
+    document.getElementById("auth-password").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitAuth();
+    });
+
+    function applyLogin(user) {
+      loggedIn = true;
+      accountName.textContent = `${user.display_name} さん`;
+      accountBar.hidden = false;
+      authCard.hidden = true;
+      updateCardState();
+    }
+    function applyLogout() {
+      loggedIn = false;
+      accountBar.hidden = true;
+      authCard.hidden = false;
+      updateCardState();
+    }
+    document.getElementById("logout-btn").addEventListener("click", async () => {
+      await fetch("/api/auth/logout", { method: "POST" });
+      applyLogout();
+    });
+
+    async function checkSession() {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.ok) applyLogin(await res.json());
+        else applyLogout();
+      } catch (e) { applyLogout(); }
     }
 
-    // 受験者名の有無で、受験可能な難易度カードの活性（淡色）を切り替える。
-    // 名前未入力のうちは淡色にして「先に名前を」と促す（押せば名前欄へフォーカス）。
+    // --- 難易度カード ---
+    // ログイン状態で難易度カードの活性を切り替える（未ログインは淡色）。
     function updateCardState() {
-      const ok = hasName();
       document.querySelectorAll(".level-card").forEach((el) => {
         const lv = levels.find((x) => x.id === el.dataset.id);
         if (!lv || !lv.available) return; // COMING SOON は常に淡色のまま
-        el.classList.toggle("disabled", !ok);
+        el.classList.toggle("disabled", !loggedIn);
       });
     }
 
-    usernameInput.addEventListener("input", updateCardState);
-
-    // 難易度カードを押したら、その場で単元選択画面へ直行する（中継ボタンは廃止）。
+    // 難易度カードを押したら、その場で単元選択画面へ直行する。
     function goToUnits(levelId) {
-      const name = usernameInput.value.trim();
-      if (!name) {
-        usernameInput.focus();
+      if (!loggedIn) {
+        document.getElementById("auth-email").focus();
         return;
       }
-      localStorage.setItem("visa_quiz_username", name);
-      const params = new URLSearchParams({ user: name, level: levelId });
+      const params = new URLSearchParams({ level: levelId });
       window.location.href = `/units.html?${params.toString()}`;
     }
 
@@ -121,9 +208,11 @@
         }
         levelGrid.appendChild(div);
       }
-      updateCardState(); // 初期反映（保存名があれば明るく・押せる状態に）
+      updateCardState(); // 初期反映（ログイン済みなら明るく・押せる状態に）
     }
 
+    setAuthMode("login");
+    checkSession();
     loadLevels();
   </script>
 
