@@ -3,7 +3,10 @@ services:
     name: visa-quiz-rag
     runtime: python
     region: singapore
-    plan: free
+    # 常時起動（スピンダウンなし）のため有料プランを指定。
+    # 注意: ダッシュボードでプラン変更しても、Blueprint同期でこの記載値に引き戻される。
+    #       プラン変更は必ずこのファイルを修正してプッシュすること（真実源はyaml）。
+    plan: standard
     branch: main
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
