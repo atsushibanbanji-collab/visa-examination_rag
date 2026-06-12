@@ -440,7 +440,9 @@ table.data th {
   letter-spacing: 0.04em;
 }
 
-table.data tr:hover td {
+/* 行hoverの色変化。履歴行（.hist-row）は正答率の色バンドが本体のため対象外
+   （hoverで色が変わると正答率の色と紛らわしい、というクライアント要望）。 */
+table.data tr:not(.hist-row):hover td {
   background: #fafaf5;
 }
 

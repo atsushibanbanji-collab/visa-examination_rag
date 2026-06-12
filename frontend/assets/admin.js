@@ -59,11 +59,12 @@
   }
 
   function progressChip(u) {
-    // 単元別進捗チップ: クリア済み or 通算満点 N/3
+    // 単元別進捗チップ。クリア済みは緑のチップ色で示すため文言は付けない（クライアント要望）。
+    // 未クリアは満点回数を N/3 表記のみで示す（「通算」の語は付けない）。
     if (u.cleared) {
-      return `<span class="prog-chip prog-chip--cleared">${escapeHtml(u.unit_name)}（${levelLabel(u.level)}）クリア済み</span>`;
+      return `<span class="prog-chip prog-chip--cleared">${escapeHtml(u.unit_name)}（${levelLabel(u.level)}）</span>`;
     }
-    return `<span class="prog-chip">${escapeHtml(u.unit_name)}（${levelLabel(u.level)}）通算 ${u.perfect_count}/${u.required}</span>`;
+    return `<span class="prog-chip">${escapeHtml(u.unit_name)}（${levelLabel(u.level)}）${u.perfect_count}/${u.required}</span>`;
   }
 
   function renderUsers(users) {
@@ -76,12 +77,13 @@
       return `<tr>
         <td><button type="button" class="user-link" data-user="${escapeHtml(u.username)}">${escapeHtml(u.username)}</button></td>
         <td class="cleared-num">${u.cleared_count}</td>
+        <td class="last-taken">${u.last_taken_at ? fmtDate(u.last_taken_at) : '<span class="muted">−</span>'}</td>
         <td class="prog-cell">${chips || '<span class="muted">進捗なし</span>'}</td>
       </tr>`;
     }).join("");
     usersArea.innerHTML = `
       <table class="data">
-        <thead><tr><th>受験者名</th><th>クリア単元数</th><th>単元別進捗</th></tr></thead>
+        <thead><tr><th>受験者名</th><th>クリア単元数</th><th>直近の受験</th><th>単元別進捗</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     `;
@@ -99,27 +101,31 @@
       const data = await fetchJson(
         `/api/${ADMIN_TOKEN}/admin/history?username=${encodeURIComponent(username)}`
       );
-      renderHistory(data.attempts || []);
+      renderHistory(data.attempts || [], data.required || 3);
     } catch (e) {
       historyArea.innerHTML = `<div class="empty">履歴の取得に失敗しました: ${escapeHtml(e.message)}</div>`;
     }
   }
 
-  function renderHistory(attempts) {
+  function renderHistory(attempts, requiredCount) {
     if (attempts.length === 0) {
       historyArea.innerHTML = '<div class="empty">この受験者の履歴はありません</div>';
       return;
     }
     // 正答率の数値は表示せず、記録1行全体を正答率バンドで色付けする
     // （満点=緑 / 61〜99%=黄 / 60%以下=赤）。
+    // 満点の行はレベルの右に（N/3）を付け、何回目の満点かを示す（クライアント要望）。
     const rows = attempts.map((a) => {
       const kind = a.unit_name
         ? escapeHtml(a.unit_name)
         : `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
+      const perfectNo = a.perfect_no
+        ? `（${a.perfect_no}/${requiredCount}）`
+        : "";
       return `<tr class="hist-row hist-row--${rateClass(a.pct)}">
         <td>${fmtDate(a.taken_at)}</td>
         <td>${kind}</td>
-        <td>${levelLabel(a.level)}</td>
+        <td>${levelLabel(a.level)}${perfectNo}</td>
       </tr>`;
     }).join("");
     historyArea.innerHTML = `

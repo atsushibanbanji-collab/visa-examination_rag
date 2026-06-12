@@ -24,8 +24,7 @@
       <section class="card">
         <h2>単元を選ぶ</h2>
         <p class="muted">
-          10問満点を <strong>通算3回</strong> でクリア。満点を取った回数を通算で数え、外しても減らない。
-          出題はAIが原本に基づき毎回生成する。
+          10問満点を <strong>通算3回</strong> でクリア。
         </p>
         <div class="unit-grid" id="unit-grid"></div>
       </section>
@@ -104,16 +103,12 @@
       const total = data.units.length;
       const cleared = data.units.filter((u) => u.cleared).length;
       const pct = total > 0 ? Math.round((cleared / total) * 100) : 0;
-      const srcWarn = data.source_available
-        ? ""
-        : `<span class="summary-status">⚠ 原本未配置（観点要約で生成）</span>`;
       summary.innerHTML = `
         <div class="summary-head">
           <span class="summary-count">${cleared} <span class="summary-slash">/</span> ${total} 単元クリア</span>
           <span class="summary-status ready">AIが毎回出題を生成</span>
         </div>
         <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
-        ${srcWarn}
       `;
 
       unitGrid.innerHTML = "";

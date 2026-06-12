@@ -58,13 +58,16 @@ def admin_users(token: str):
 
     users = []
     for username, units in by_user.items():
-        # 表示順: クリア済みを先に、その中は単元名、未クリアは通算満点の多い順
-        units.sort(key=lambda u: (not u["cleared"], u["unit_name"]))
+        # 表示順: 直近に受験した単元ほど前（クライアント要望）。未受験日時は末尾。
+        units.sort(key=lambda u: u.get("last_taken_at") or "", reverse=True)
         cleared_count = sum(1 for u in units if u["cleared"])
+        # 受験者としての直近受験日時 = 各単元の last_taken_at の最大値
+        last_taken_at = max((u.get("last_taken_at") or "" for u in units), default="") or None
         users.append(
             {
                 "username": username,
                 "cleared_count": cleared_count,
+                "last_taken_at": last_taken_at,
                 "units": units,
             }
         )
@@ -81,8 +84,23 @@ def admin_history(token: str, username: str):
     """
     _check_token(token)
     name_map = _unit_name_map()
+    # 満点の通し番号付与のため余裕を持って取得（時系列の古い側から数える）
+    attempts = db.get_history_for_user(username, limit=1000)
+
+    # 満点の通し番号: 同一 (level, unit) で時系列昇順に 1, 2, 3... と数える。
+    # attempts は新しい順なので、逆順に走査してカウンタを進める。
+    perfect_no_by_id: dict = {}
+    counters: dict = {}
+    for a in reversed(attempts):
+        total = a.get("total") or 0
+        score = a.get("score") or 0
+        if total and score == total:
+            key = (a.get("level"), a.get("unit"))
+            counters[key] = counters.get(key, 0) + 1
+            perfect_no_by_id[a.get("id")] = counters[key]
+
     out = []
-    for a in db.get_history_for_user(username):
+    for a in attempts[:50]:  # 表示件数は従来どおり50件まで
         total = a.get("total") or 0
         score = a.get("score") or 0
         pct = round(score * 100 / total) if total else 0
@@ -94,6 +112,8 @@ def admin_history(token: str, username: str):
                 "unit_id": unit_id,
                 "unit_name": name_map.get(unit_id) if unit_id else None,
                 "pct": pct,  # 正答率のみ。得点は意図的に返さない。
+                # 満点なら「何回目の満点か」（同一レベル×単元の通算。クリア閾値と並べて表示する用）
+                "perfect_no": perfect_no_by_id.get(a.get("id")),
             }
         )
-    return {"username": username, "attempts": out}
+    return {"username": username, "attempts": out, "required": UNIT_CLEAR_REQUIRED_STREAK}
