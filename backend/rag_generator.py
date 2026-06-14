@@ -49,23 +49,13 @@ def _build_user_prompt(
     perspectives: List[dict],
     fmt: str,
     n_choices: int,
-    test_mode: bool = False,  # TEST MODE（撤去予定）
 ) -> str:
     """LLMへ渡すユーザープロンプトを組み立てる（出題形式 fmt で出力スキーマを切替）。
 
     原本テキストはキャッシュ効率のため system 側（キャッシュ対象ブロック）に置き、
     ここには難度・単元・観点・出力形式だけを入れる。
-    test_mode のときは知識ベースを参照させず、形式確認用のダミー指示にする。
     """
     lines: List[str] = []
-    if test_mode:
-        lines.append(
-            "# テストモード\n"
-            "これは動作確認用のテストモードである。知識ベースを参照せず、"
-            "下記の出力形式どおりの**ダミー問題**を作れ。内容の正確さは問わない。"
-            "形式（スキーマ）だけは厳密に守ること。"
-        )
-        lines.append("")
     lines.append(f"# 難度\n{level} … {level_description}")
     lines.append("")
     lines.append(f"# 単元\n{unit_name}")
@@ -250,7 +240,6 @@ def generate_questions(
     seed: Optional[int] = None,
     llm_call: Optional[LLMCall] = None,
     max_retries: int = 2,
-    test_mode: bool = False,  # TEST MODE（撤去予定）
 ) -> dict:
     """与えられた観点リストから問題を生成する（サンプリングは呼び出し側の責務）。
 
@@ -258,7 +247,6 @@ def generate_questions(
     渡された観点ちょうどの数だけ問題を返す（多く返ってきたら先頭で切り詰める）。
     原本テキストはこの観点群の source_pages から都度組み立てる。
 
-    test_mode のときは原本（知識ベース）を参照せず簡略プロンプトでダミー生成する。
     ただし LLM 呼び出しの経路自体は本番と同一（配線の動作確認を兼ねる）。
 
     Args:
@@ -282,18 +270,14 @@ def generate_questions(
     want = len(perspectives)
     fmt = _format_for_level(level)
 
-    # 根拠テキスト: 渡された観点の source_pages を集約（テストモードでは参照しない）
-    if test_mode:
-        source_text = ""
-        grounding = "test"
-    else:
-        all_pages: List[int] = []
-        for p in perspectives:
-            for pg in p.get("source_pages", []):
-                if pg not in all_pages:
-                    all_pages.append(pg)
-        source_text = rag_source.text_for_pages(all_pages)
-        grounding = "pdf" if source_text else "summary"
+    # 根拠テキスト: 渡された観点の source_pages を集約
+    all_pages: List[int] = []
+    for p in perspectives:
+        for pg in p.get("source_pages", []):
+            if pg not in all_pages:
+                all_pages.append(pg)
+    source_text = rag_source.text_for_pages(all_pages)
+    grounding = "pdf" if source_text else "summary"
 
     user_prompt = _build_user_prompt(
         level=level,
@@ -302,7 +286,6 @@ def generate_questions(
         perspectives=perspectives,
         fmt=fmt,
         n_choices=RAG_CHOICES,
-        test_mode=test_mode,
     )
     # システムブロック: 指示は静的。原本テキストは大きく同一単元の連続生成で
     # 使い回せるため、キャッシュ対象（ephemeral）ブロックとして置く。
@@ -358,7 +341,6 @@ def generate_questions(
         "retries": attempts_used - 1,
         "n_choices": RAG_CHOICES,
         "format": fmt,
-        "test": bool(test_mode),
     }
     return {"questions": questions, "metrics": metrics}
 

@@ -4,12 +4,8 @@
 
 (function () {
   const params = new URLSearchParams(location.search);
-  const username = (params.get("user") || "").trim();
   const level = params.get("level") || "beginner";
   const unit = params.get("unit") || ""; // "<unit_id>"
-  // --- TEST MODE（撤去予定）: 起動判定。?test=1 のほか受験者名「テストモード」でも発動 ---
-  const testMode = params.get("test") === "1" || username === "テストモード";
-  // --- /TEST MODE ---
 
   const loadingEl = document.getElementById("loading");
   const quizArea = document.getElementById("quiz-area");
@@ -33,19 +29,22 @@
   const feedbackLabel = document.getElementById("feedback-label");
   const feedbackExplanation = document.getElementById("feedback-explanation-text");
 
-  if (!username) {
-    showError("受験者名が指定されていません。トップから開始してください。");
-    return;
-  }
   if (!unit) {
     showError("単元が指定されていません。単元一覧から選んでください。");
     return;
   }
 
   const levelName = { beginner: "初級", intermediate: "中級", advanced: "上級" }[level] || level;
-  userLabel.textContent = `受験者：${username}（${levelName}）`;
+  userLabel.textContent = `（${levelName}）`;
+  // 表示名はログイン情報から取得して反映する
+  fetch("/api/auth/me").then((r) => {
+    if (r.status === 401) { location.href = "/"; return null; }
+    return r.json();
+  }).then((me) => {
+    if (me) userLabel.textContent = `受験者：${me.display_name}（${levelName}）`;
+  }).catch(() => {});
 
-  const unitsParams = new URLSearchParams({ user: username, level });
+  const unitsParams = new URLSearchParams({ level });
   errorBack.href = `/units.html?${unitsParams.toString()}`;
   const unitsUrl = `/units.html?${unitsParams.toString()}`;
 
@@ -76,7 +75,7 @@
 
       // ヘッダ用の単元名取得（失敗は致命的でない）
       try {
-        const p = new URLSearchParams({ level, user: username });
+        const p = new URLSearchParams({ level });
         const ures = await fetch(`/api/rag/units?${p.toString()}`);
         if (ures.ok) {
           const udata = await ures.json();
@@ -89,8 +88,12 @@
       const res = await fetch("/api/rag/quiz/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, level, unit, test: testMode }),
+        body: JSON.stringify({ level, unit }),
       });
+      if (res.status === 401) {
+        location.href = "/";  // 未ログイン → トップ（ログイン画面）へ
+        return;
+      }
       if (!res.ok) {
         let detail = "";
         try { detail = (await res.json()).detail || ""; } catch (_) {}
@@ -161,7 +164,7 @@
   }
 
   function renderModeLabel() {
-    modeLabelEl.textContent = testMode ? "TEST" : "UNIT";
+    modeLabelEl.textContent = "UNIT";
     unitNameEl.textContent = unitMeta ? (unitMeta.name || "") : "";
   }
 
@@ -368,7 +371,6 @@
     submitBtn.textContent = "採点中…";
     try {
       const payload = {
-        username,
         level,
         unit,
         session_id: sessionId,
@@ -391,7 +393,7 @@
       const result = await res.json();
       if (genMetrics) result.gen_metrics = genMetrics;
       sessionStorage.setItem("visa_quiz_last_result", JSON.stringify(result));
-      const p = new URLSearchParams({ user: username, level });
+      const p = new URLSearchParams({ level });
       location.href = `/result.html?${p.toString()}`;
     } catch (e) {
       submitBtn.disabled = false;

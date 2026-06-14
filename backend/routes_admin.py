@@ -9,8 +9,9 @@ RAG出題専用。サマリー・受験回数・最高点・平均点・全件�
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-from backend import db, rag_perspectives
+from backend import auth, db, rag_perspectives
 from backend.config import ADMIN_TOKEN, UNIT_CLEAR_REQUIRED_STREAK
 from backend.db import SOURCE_RAG
 
@@ -32,16 +33,19 @@ def _unit_name_map() -> dict:
 
 @router.get("/api/{token}/admin/users")
 def admin_users(token: str):
-    """受験者一覧。各受験者の単元別進捗（通算満点 / クリア状況）と、
-    クリア済み単元の総数を返す。クリア数の降順、同数は受験者名の昇順で並べる。
+    """アカウント一覧。各アカウントの単元別進捗（満点回数 / クリア状況）と、
+    クリア済み単元の総数を返す。クリア数の降順、同数は表示名の昇順で並べる。
+
+    進捗のないアカウント（登録のみ）も一覧に出す。
+    user_id の紐づかない旧データ（氏名のみの記録）は表示しない。
     """
     _check_token(token)
     name_map = _unit_name_map()
-    rows = db.get_all_unit_progress(source=SOURCE_RAG)
+    rows = db.get_all_unit_progress_by_account(source=SOURCE_RAG)
 
-    by_user: dict = {}
+    by_uid: dict = {}
     for r in rows:
-        bucket = by_user.setdefault(r["username"], [])
+        bucket = by_uid.setdefault(r["user_id"], [])
         cleared = r.get("graduated_at") is not None or \
             r.get("perfect_count", 0) >= UNIT_CLEAR_REQUIRED_STREAK
         bucket.append(
@@ -57,35 +61,40 @@ def admin_users(token: str):
         )
 
     users = []
-    for username, units in by_user.items():
+    for account in db.list_users():
+        units = by_uid.get(account["id"], [])
         # 表示順: 直近に受験した単元ほど前（クライアント要望）。未受験日時は末尾。
         units.sort(key=lambda u: u.get("last_taken_at") or "", reverse=True)
         cleared_count = sum(1 for u in units if u["cleared"])
-        # 受験者としての直近受験日時 = 各単元の last_taken_at の最大値
         last_taken_at = max((u.get("last_taken_at") or "" for u in units), default="") or None
         users.append(
             {
-                "username": username,
+                "user_id": account["id"],
+                "username": account["display_name"],
+                "email": account["email"],
                 "cleared_count": cleared_count,
                 "last_taken_at": last_taken_at,
                 "units": units,
             }
         )
-    # クリア数の降順、同数は名前の昇順
+    # クリア数の降順、同数は表示名の昇順
     users.sort(key=lambda u: (-u["cleared_count"], u["username"]))
     return {"users": users, "required": UNIT_CLEAR_REQUIRED_STREAK}
 
 
 @router.get("/api/{token}/admin/history")
-def admin_history(token: str, username: str):
-    """指定受験者の受験履歴。得点（score/total）は返さず、正答率（%）のみを返す。
+def admin_history(token: str, user_id: int):
+    """指定アカウントの受験履歴。得点（score/total）は返さず、正答率（%）のみを返す。
 
     各回ごとに 日時・レベル・単元・正答率 を返す（どの受験か特定できる情報は維持）。
     """
     _check_token(token)
+    account = db.get_user_by_id(user_id)
+    if account is None:
+        raise HTTPException(404, "アカウントが見つかりません。")
     name_map = _unit_name_map()
     # 満点の通し番号付与のため余裕を持って取得（時系列の古い側から数える）
-    attempts = db.get_history_for_user(username, limit=1000)
+    attempts = db.get_history_by_user_id(user_id, limit=1000)
 
     # 満点の通し番号: 同一 (level, unit) で時系列昇順に 1, 2, 3... と数える。
     # attempts は新しい順なので、逆順に走査してカウンタを進める。
@@ -116,4 +125,27 @@ def admin_history(token: str, username: str):
                 "perfect_no": perfect_no_by_id.get(a.get("id")),
             }
         )
-    return {"username": username, "attempts": out, "required": UNIT_CLEAR_REQUIRED_STREAK}
+    return {
+        "username": account["display_name"],
+        "email": account["email"],
+        "attempts": out,
+        "required": UNIT_CLEAR_REQUIRED_STREAK,
+    }
+
+
+class AdminPasswordResetRequest(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+@router.post("/api/{token}/admin/users/{user_id}/password")
+def admin_reset_password(token: str, user_id: int, req: AdminPasswordResetRequest):
+    """パスワードを忘れたユーザーのために管理者が再設定する（メール送信基盤は持たない）。
+
+    再設定後、そのユーザーの全ログインセッションは失効する（update_user_password 内）。
+    新しいパスワードは管理者が口頭等で本人へ伝える運用。
+    """
+    _check_token(token)
+    if db.get_user_by_id(user_id) is None:
+        raise HTTPException(404, "アカウントが見つかりません。")
+    db.update_user_password(user_id, auth.hash_password(req.new_password))
+    return {"ok": True, "user_id": user_id}

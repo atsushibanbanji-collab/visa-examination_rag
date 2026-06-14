@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>マイページ - ビザ検定</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="header">
+      <h1>ビザ検定</h1>
+      <p class="subtitle">マイページ</p>
+    </header>
+
+    <div id="loading" class="loading">読み込み中…</div>
+
+    <div id="content" style="display: none;">
+      <!-- プロフィール -->
+      <section class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <div>
+            <div id="profile-name" style="font-size: 18px; font-weight: 600;"></div>
+            <div id="profile-email" class="muted"></div>
+          </div>
+          <span>
+            <a href="/" class="btn btn-secondary" style="text-decoration: none; padding: 6px 12px; font-size: 13px;">検定トップへ</a>
+            <button type="button" id="logout-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">ログアウト</button>
+          </span>
+        </div>
+      </section>
+
+      <!-- 単元別進捗（レベル別） -->
+      <section class="card">
+        <h2>単元別進捗</h2>
+        <div id="progress-area"><div class="loading">読み込み中…</div></div>
+      </section>
+
+      <!-- 受験履歴 -->
+      <section class="card">
+        <h2>受験履歴</h2>
+        <div id="history-area"><div class="loading">読み込み中…</div></div>
+      </section>
+
+      <!-- パスワード変更 -->
+      <section class="card">
+        <h2>パスワード変更</h2>
+        <label for="pw-current">現在のパスワード</label>
+        <input type="password" id="pw-current" maxlength="128" autocomplete="current-password">
+        <label for="pw-new" style="margin-top: 8px; display: block;">新しいパスワード（8文字以上）</label>
+        <input type="password" id="pw-new" maxlength="128" autocomplete="new-password">
+        <p class="muted" id="pw-msg" style="margin-top: 8px;" hidden></p>
+        <button type="button" class="btn" id="pw-submit" style="margin-top: 12px;">変更する</button>
+      </section>
+    </div>
+  </div>
+
+  <script src="/assets/common.js"></script>
+  <script>
+    const LEVELS = ["beginner", "intermediate", "advanced"];
+
+    async function init() {
+      // 未ログインならトップ（ログイン画面）へ
+      const meRes = await fetch("/api/auth/me");
+      if (meRes.status === 401) { location.href = "/"; return; }
+      const me = await meRes.json();
+      document.getElementById("profile-name").textContent = `${me.display_name} さん`;
+      document.getElementById("profile-email").textContent = me.email;
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("content").style.display = "block";
+      loadProgress();
+      loadHistory();
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", async () => {
+      await fetch("/api/auth/logout", { method: "POST" });
+      location.href = "/";
+    });
+
+    // --- 単元別進捗（レベルごとに取得して一覧表示） ---
+    async function loadProgress() {
+      const area = document.getElementById("progress-area");
+      try {
+        const sections = [];
+        for (const level of LEVELS) {
+          const res = await fetch(`/api/rag/units?level=${level}`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          const rows = (data.units || []).map((u) => {
+            const status = u.cleared
+              ? '<span class="prog-chip prog-chip--cleared">クリア</span>'
+              : `<span class="prog-chip">${u.perfect_count}/${u.required_streak}</span>`;
+            const last = u.last_taken_at ? fmtDate(u.last_taken_at) : "−";
+            return `<tr><td>${escapeHtml(u.name)}</td><td>${status}</td><td>${last}</td></tr>`;
+          }).join("");
+          sections.push(`
+            <h3 style="margin: 12px 0 6px;">${levelLabel(level)}</h3>
+            <table class="data">
+              <thead><tr><th>単元</th><th>進捗</th><th>最終受験</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>`);
+        }
+        area.innerHTML = sections.join("") || '<div class="empty">進捗はまだありません</div>';
+      } catch (e) {
+        area.innerHTML = '<div class="empty">進捗の取得に失敗しました</div>';
+      }
+    }
+
+    // --- 受験履歴 ---
+    async function loadHistory() {
+      const area = document.getElementById("history-area");
+      try {
+        const res = await fetch("/api/history");
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        const attempts = data.attempts || [];
+        if (attempts.length === 0) {
+          area.innerHTML = '<div class="empty">受験履歴はまだありません</div>';
+          return;
+        }
+        const rows = attempts.map((a) => {
+          const pct = a.total ? Math.round((a.score * 100) / a.total) : 0;
+          return `<tr>
+            <td>${fmtDate(a.taken_at)}</td>
+            <td>${levelLabel(a.level)}</td>
+            <td><span class="score-pill ${pillClass(pct)}">${a.score} / ${a.total}</span></td>
+          </tr>`;
+        }).join("");
+        area.innerHTML = `
+          <table class="data">
+            <thead><tr><th>受験日時</th><th>レベル</th><th>得点</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      } catch (e) {
+        area.innerHTML = '<div class="empty">履歴の取得に失敗しました</div>';
+      }
+    }
+
+    // --- パスワード変更 ---
+    document.getElementById("pw-submit").addEventListener("click", async () => {
+      const msg = document.getElementById("pw-msg");
+      msg.hidden = true;
+      try {
+        const res = await fetch("/api/auth/password", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            current_password: document.getElementById("pw-current").value,
+            new_password: document.getElementById("pw-new").value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "変更に失敗しました");
+        alert("パスワードを変更しました。新しいパスワードで再ログインしてください。");
+        location.href = "/";
+      } catch (e) {
+        msg.textContent = e.message;
+        msg.style.color = "var(--danger)";
+        msg.hidden = false;
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

@@ -55,10 +55,6 @@ RAG_QUESTIONS_PER_QUIZ = int(os.environ.get("RAG_QUESTIONS_PER_QUIZ", "10"))
 # 開始時はまず先頭 RAG_HEAD_COUNT 問だけを生成して即返し（=最初の描画を速く）、
 # 残りはユーザーが解いている間に /api/rag/quiz/continue で生成・追記する。
 RAG_HEAD_COUNT = int(os.environ.get("RAG_HEAD_COUNT", "3"))
-# --- TEST MODE（撤去予定）: 動作確認用テストモードの出題数 ---------------------
-# 本番フローを汚さず最小コストで配線を確認する。撤去手順は TODO.md を参照。
-RAG_TEST_QUESTIONS = int(os.environ.get("RAG_TEST_QUESTIONS", "2"))
-# ------------------------------------------------------------------------------
 RAG_SESSION_TTL_SEC = int(os.environ.get("RAG_SESSION_TTL_SEC", "7200"))  # セッション保持（既定2時間）
 
 # --- DEV ONLY（撤去予定）: 管理画面確認用デモデータ生成ボタン -----------------

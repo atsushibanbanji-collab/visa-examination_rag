@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from backend import db
+from backend import auth, db
 from backend.config import DEMO_SEED_ENABLED, UNIT_CLEAR_REQUIRED_STREAK
 from backend.db import SOURCE_RAG
 
@@ -105,9 +105,20 @@ def seed_demo_status():
     return {"enabled": DEMO_SEED_ENABLED}
 
 
+_DEMO_PASSWORD = "demo-pass-123"  # 全デモアカウント共通（構築段階専用）
+
+
+def _demo_email(idx: int) -> str:
+    return f"demo{idx + 1:02d}@example.local"
+
+
 @router.post("/api/dev/seed-demo")
 def seed_demo():
-    """ペルソナ10人分のデモデータを生成する（既存の同名記録は削除して作り直す）。"""
+    """ペルソナ10人分のデモアカウントと受験データを生成する（再実行時は削除して作り直す）。
+
+    各ペルソナは実アカウント（メール＋パスワード）として作成され、ログイン動作の確認にも使える。
+    メール: demo01@example.local 〜 demo10@example.local / パスワード: demo-pass-123（共通）
+    """
     if not DEMO_SEED_ENABLED:
         raise HTTPException(404, "デモデータ生成は無効化されています")
 
@@ -120,28 +131,36 @@ def seed_demo():
 
     users_summary = []
     seq = 0
-    for username, plans in _PERSONAS:
-        db.delete_user_records(username)  # 再実行で増殖させない
+    for idx, (display_name, plans) in enumerate(_PERSONAS):
+        email = _demo_email(idx)
+        # 再実行で増殖させない: 既存デモアカウントを記録ごと削除して作り直す
+        existing = db.get_user_by_email(email)
+        if existing is not None:
+            db.delete_user_account_records(existing["id"])
+        user_id = db.create_user(email, auth.hash_password(_DEMO_PASSWORD), display_name)
         cleared_units = 0
         for level, unit, pct in plans:
             score = max(0, min(_TOTAL_QUESTIONS, round(pct / 100 * _TOTAL_QUESTIONS)))
             taken_at = (now - span + step * seq).strftime("%Y-%m-%dT%H:%M:%S+00:00")
             seq += 1
             db.save_attempt(
-                username, level, score, _TOTAL_QUESTIONS,
+                email, level, score, _TOTAL_QUESTIONS,
                 details=_details_json(unit, score, _TOTAL_QUESTIONS),
                 source=SOURCE_RAG,
                 taken_at=taken_at,
+                user_id=user_id,
             )
             prog = db.update_unit_progress(
-                username, level, unit, perfect=(score == _TOTAL_QUESTIONS),
+                email, level, unit, perfect=(score == _TOTAL_QUESTIONS),
                 clear_streak_required=UNIT_CLEAR_REQUIRED_STREAK,
                 source=SOURCE_RAG,
+                user_id=user_id,
             )
             if prog.get("newly_cleared"):
                 cleared_units += 1
         users_summary.append(
-            {"username": username, "attempts": len(plans), "cleared_units": cleared_units}
+            {"username": display_name, "email": email,
+             "attempts": len(plans), "cleared_units": cleared_units}
         )
 
     return {

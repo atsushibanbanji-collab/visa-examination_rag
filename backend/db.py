@@ -159,6 +159,38 @@ def _init_db_postgres() -> None:
             "ON quiz_sessions(expires_at)"
         )
         cur.execute("ALTER TABLE quiz_sessions ADD COLUMN IF NOT EXISTS pending TEXT")
+
+        # 認証: ユーザーアカウント（メール＋パスワード）。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                email         TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                display_name  TEXT NOT NULL,
+                created_at    TEXT NOT NULL
+            )
+            """
+        )
+        # 認証: ログインセッション（トークンはSHA-256のみ保存）。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id    BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)"
+        )
+        # アカウント化: 既存テーブルへ user_id を追加（usernameは互換のため残す＝壊さず足す）。
+        cur.execute("ALTER TABLE attempts ADD COLUMN IF NOT EXISTS user_id BIGINT")
+        cur.execute("ALTER TABLE unit_progress ADD COLUMN IF NOT EXISTS user_id BIGINT")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_attempts_user_id ON attempts(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_unit_progress_user_id ON unit_progress(user_id)")
         conn.commit()
     finally:
         conn.close()
@@ -243,6 +275,42 @@ def _init_db_sqlite() -> None:
         }
         if "pending" not in existing_cols:
             cur.execute("ALTER TABLE quiz_sessions ADD COLUMN pending TEXT")
+
+        # 認証: ユーザーアカウント（メール＋パスワード）。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                email         TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                display_name  TEXT NOT NULL,
+                created_at    TEXT NOT NULL
+            )
+            """
+        )
+        # 認証: ログインセッション（トークンはSHA-256のみ保存）。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)"
+        )
+        # アカウント化: 既存テーブルへ user_id を追加（usernameは互換のため残す＝壊さず足す）。
+        at_cols = {r[1] for r in cur.execute("PRAGMA table_info(attempts)").fetchall()}
+        if "user_id" not in at_cols:
+            cur.execute("ALTER TABLE attempts ADD COLUMN user_id INTEGER")
+        up_cols2 = {r[1] for r in cur.execute("PRAGMA table_info(unit_progress)").fetchall()}
+        if "user_id" not in up_cols2:
+            cur.execute("ALTER TABLE unit_progress ADD COLUMN user_id INTEGER")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_attempts_user_id ON attempts(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_unit_progress_user_id ON unit_progress(user_id)")
         conn.commit()
     finally:
         conn.close()
@@ -256,6 +324,7 @@ def save_attempt(
     details: str,
     source: str = SOURCE_POOL,
     taken_at: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> int:
     """受験1回分を保存する。
 
@@ -267,10 +336,10 @@ def save_attempt(
     """
     with get_conn() as conn:
         base_sql = """
-            INSERT INTO attempts (username, level, source, score, total, taken_at, details)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO attempts (username, level, source, score, total, taken_at, details, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """
-        params = (username, level, source, score, total, taken_at or _now_iso(), details)
+        params = (username, level, source, score, total, taken_at or _now_iso(), details, user_id)
         if IS_POSTGRES:
             # PostgreSQL に lastrowid は無いため RETURNING で採番値を受け取る
             cur = conn.execute(base_sql.rstrip() + " RETURNING id", params)
@@ -380,6 +449,7 @@ def update_unit_progress(
     perfect: bool,
     clear_streak_required: Optional[int] = None,
     source: str = SOURCE_POOL,
+    user_id: Optional[int] = None,
 ) -> dict:
     """累計方式の進捗更新。満点なら通算満点回数 perfect_count を +1（非満点でも減らさない）。
 
@@ -408,19 +478,19 @@ def update_unit_progress(
         # まず行を確保（無ければ作る）。挿入の衝突無視は方言差があるため分岐する
         # （SQLite: INSERT OR IGNORE / PostgreSQL: ON CONFLICT DO NOTHING）。
         ensure_cols = """
-              (username, level, unit_id, source, perfect_count, streak_count, best_streak, last_taken_at)
-            VALUES (?, ?, ?, ?, 0, 0, 0, NULL)
+              (username, level, unit_id, source, perfect_count, streak_count, best_streak, last_taken_at, user_id)
+            VALUES (?, ?, ?, ?, 0, 0, 0, NULL, ?)
             """
         if IS_POSTGRES:
             conn.execute(
                 "INSERT INTO unit_progress" + ensure_cols
                 + " ON CONFLICT (username, level, unit_id, source) DO NOTHING",
-                (username, level, unit_id, source),
+                (username, level, unit_id, source, user_id),
             )
         else:
             conn.execute(
                 "INSERT OR IGNORE INTO unit_progress" + ensure_cols,
-                (username, level, unit_id, source),
+                (username, level, unit_id, source, user_id),
             )
 
         row = conn.execute(
@@ -618,3 +688,177 @@ def cleanup_expired_sessions() -> int:
             "DELETE FROM quiz_sessions WHERE expires_at <= ?", (_now_iso(),)
         )
         return cur.rowcount
+
+
+# ----------------------------------------------------------------------
+# 認証: ユーザー・ログインセッション
+# ----------------------------------------------------------------------
+def create_user(email: str, password_hash: str, display_name: str) -> Optional[int]:
+    """ユーザーを作成して id を返す。メール重複時は None。"""
+    email = email.strip().lower()
+    with get_conn() as conn:
+        dup = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        if dup is not None:
+            return None
+        base_sql = """
+            INSERT INTO users (email, password_hash, display_name, created_at)
+            VALUES (?, ?, ?, ?)
+            """
+        params = (email, password_hash, display_name.strip(), _now_iso())
+        if IS_POSTGRES:
+            cur = conn.execute(base_sql.rstrip() + " RETURNING id", params)
+            return cur.fetchone()["id"]
+        cur = conn.execute(base_sql, params)
+        return cur.lastrowid
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, email, password_hash, display_name, created_at FROM users WHERE email = ?",
+            (email.strip().lower(),),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, email, display_name, created_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_users() -> List[dict]:
+    """全アカウント（管理画面用。password_hash は返さない）。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, email, display_name, created_at FROM users ORDER BY id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    """パスワードを更新し、そのユーザーの全ログインセッションを失効させる。"""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id)
+        )
+        if cur.rowcount != 1:
+            return False
+        conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+        return True
+
+
+def create_auth_session(token_hash: str, user_id: int, ttl_sec: int) -> None:
+    now = datetime.utcnow()
+    expires = now + timedelta(seconds=ttl_sec)
+    with get_conn() as conn:
+        # ついでに期限切れセッションを掃除する
+        conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (_now_iso(),))
+        conn.execute(
+            """
+            INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                token_hash,
+                user_id,
+                now.isoformat(timespec="seconds") + "Z",
+                expires.isoformat(timespec="seconds") + "Z",
+            ),
+        )
+
+
+def get_user_by_session(token_hash: str) -> Optional[dict]:
+    """有効なセッションからユーザーを引く（期限切れ・不存在は None）。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT u.id, u.email, u.display_name, s.expires_at
+            FROM auth_sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        if d.pop("expires_at") <= _now_iso():
+            conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+            return None
+        return d
+
+
+def delete_auth_session(token_hash: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+
+
+# ----------------------------------------------------------------------
+# 認証: user_id ベースのデータ取得（アカウント化後の本流）
+# ----------------------------------------------------------------------
+def get_progress_map_by_user_id(user_id: int, level: str, source: str = SOURCE_RAG) -> dict:
+    """user_id × level × source の単元別進捗を {unit_id: progress_dict} で返す。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT unit_id, perfect_count, streak_count, best_streak, last_taken_at, graduated_at
+            FROM unit_progress
+            WHERE user_id = ? AND level = ? AND source = ?
+            """,
+            (user_id, level, source),
+        ).fetchall()
+        return {r["unit_id"]: dict(r) for r in rows}
+
+
+def get_history_by_user_id(user_id: int, limit: int = 50):
+    """user_id の受験履歴（新しい順）。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, level, source, score, total, taken_at, details
+            FROM attempts
+            WHERE user_id = ?
+            ORDER BY taken_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            meta = _extract_attempt_meta(d.pop("details", None))
+            d.update(meta)
+            out.append(d)
+        return out
+
+
+def get_all_unit_progress_by_account(source: str = SOURCE_RAG) -> List[dict]:
+    """user_id が紐づく進捗行のみ返す（管理画面のアカウント別一覧用）。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT user_id, level, unit_id, perfect_count, streak_count,
+                   best_streak, last_taken_at, graduated_at
+            FROM unit_progress
+            WHERE source = ? AND user_id IS NOT NULL
+            ORDER BY user_id ASC
+            """,
+            (source,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_user_account_records(user_id: int) -> None:
+    """指定アカウントの受験記録・進捗・ログインセッション・アカウント本体を削除する。
+
+    デモデータの再生成（routes_dev）専用。通常運用の経路からは呼ばない。
+    """
+    with get_conn() as conn:
+        conn.execute("DELETE FROM attempts WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM unit_progress WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))

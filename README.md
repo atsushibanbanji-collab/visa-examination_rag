@@ -56,7 +56,9 @@ backend/
   db.py                永続化（SQLite/PostgreSQL両対応）。attempts / unit_progress / quiz_sessions
   models.py            Pydantic スキーマ
   routes_quiz.py       RAG出題（ヘッド/テイル）・即時判定・採点・履歴・単元一覧
-  routes_admin.py      管理系（受験者一覧＝進捗 / 個別履歴＝正答率）
+  routes_admin.py      管理系（アカウント一覧＝進捗 / 個別履歴＝正答率 / パスワード再設定）
+  routes_auth.py       認証（登録・ログイン・ログアウト・me・パスワード変更）
+  auth.py              認証コア（PBKDF2ハッシュ・Cookieセッション）
   routes_dev.py        デモデータ生成（DEV ONLY・撤去予定。冒頭に撤去手順を記載）
   rag_perspectives.py  観点メタのロード＆サンプリング
   rag_source.py        原本PDFのページテキスト供給（2-upレイアウト対応）
@@ -65,7 +67,8 @@ backend/
   perspectives/        観点メタ22ファイル（初級8・中級7・上級7／計412観点）
   source/              原本PDF/txt（gitignore。実体は手動配置）
 frontend/
-  index.html           名前＋難易度の選択（カード押下で単元選択へ直行）
+  index.html           ログイン／新規登録＋難易度の選択（カード押下で単元選択へ直行）
+  mypage.html          マイページ（進捗・履歴・パスワード変更）
   units.html           単元選択（単元別の通算満点進捗を表示）
   quiz.html            受験画面（形式に応じ選択肢/入力欄を切替）
   result.html          結果＋RAG生成メトリクス＋進捗
@@ -104,15 +107,13 @@ APIキー不要のモックLLMで、出題〜判定〜採点〜進捗〜管理�
 
 （`backend/source/` 未配置だと `grounding=pdf` 系のアサーションのみ落ちる。これは環境要因。）
 
-### テストモード（撤去予定の機能）
+### 認証（メール＋パスワード）
 
-本機能は運用移行時に撤去する。コード中の `TEST MODE（撤去予定）` コメントが標識で、撤去手順は TODO.md を参照。
-
-動作確認用に、本番フローを汚さず最小コストで配線を確認できる。
-出題2問・原本非参照のダミー生成（LLM経路は本番同一）になる。起動は2通り併存：
-URLに `?test=1` を付けるか、**受験者名を「テストモード」にする**。
-構築段階のため、テストモードの受験も履歴・進捗に記録する（管理画面の確認用。`details` の `test` フラグで識別可能）。
-例：`/quiz.html?user=テスト太郎&level=beginner&unit=b_visa&test=1`
+受験者はメールアドレス＋パスワードで自由登録し、ログインして受験する（HttpOnly Cookie セッション・30日）。
+受験データ（attempts / unit_progress）は user_id で本人に紐づく。マイページ（/mypage.html）で
+自分の進捗・履歴の確認とパスワード変更ができる。パスワードを忘れた場合は管理画面から
+管理者が再設定する（メール送信基盤は持たない）。
+旧テストモード（氏名「テストモード」/ ?test=1）は撤去済み。
 
 ### 原本PDFの配置
 
@@ -133,7 +134,6 @@ PDF未配置でも、観点メタの `summary`（原本に基づく事実要約�
 | `RAG_CHOICES` | 3 | 中級の選択肢数（3 or 4） |
 | `RAG_QUESTIONS_PER_QUIZ` | 10 | 1回の出題数 |
 | `RAG_HEAD_COUNT` | 3 | 開始時に先出しするヘッド問題数（残りは裏生成） |
-| `RAG_TEST_QUESTIONS` | 2 | テストモード（?test=1）の出題数 |
 | `RAG_SESSION_TTL_SEC` | 7200 | セッション保持秒（既定2時間） |
 | `VISA_TYPE_UNITS` | b_visa,e_visa,f_visa,h1b_visa,j_visa,l_visa | 出題対象の単元（カンマ区切り） |
 | `ADMIN_TOKEN` | Kp7vQm2xRt | 管理画面トークン（`admin-<token>.html` と一致必須） |
@@ -156,7 +156,12 @@ PDF未配置でも、観点メタの `summary`（原本に基づく事実要約�
 | GET | `/api/history?username=` | 個人履歴 |
 | GET | `/api/{TOKEN}/admin/users` | 受験者一覧（名前＋単元別進捗・クリア数降順） |
 | GET | `/api/{TOKEN}/admin/history?username=` | 個別履歴（得点は返さず正答率のみ） |
-| GET/POST | `/api/dev/seed-demo` | デモデータ生成（DEV ONLY・撤去予定。GET=有効可否 / POST=生成実行） |
+| GET/POST | `/api/dev/seed-demo` | デモデータ生成（DEV ONLY・撤去予定。デモは実アカウント demo01〜10@example.local / demo-pass-123） |
+| POST | `/api/auth/register` | 自由登録（メール＋パスワード＋表示名）。成功時ログイン |
+| POST | `/api/auth/login` / `/api/auth/logout` | ログイン／ログアウト |
+| GET | `/api/auth/me` | ログイン中ユーザー情報（未ログインは401） |
+| POST | `/api/auth/password` | 自分のパスワード変更（全セッション失効） |
+| POST | `/api/{TOKEN}/admin/users/{user_id}/password` | 管理者によるパスワード再設定 |
 
 ## 管理画面
 
