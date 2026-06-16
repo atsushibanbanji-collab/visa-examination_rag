@@ -59,7 +59,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" id="level-card" hidden>
       <div class="level-grid" id="level-grid">
         <div class="loading">読み込み中…</div>
       </div>
@@ -69,6 +69,7 @@
 
   <script>
     const levelGrid = document.getElementById("level-grid");
+    const levelCard = document.getElementById("level-card");
     const accountBar = document.getElementById("account-bar");
     const accountName = document.getElementById("account-name");
     const authCard = document.getElementById("auth-card");
@@ -129,12 +130,14 @@
       accountName.textContent = `${user.display_name} さん`;
       accountBar.hidden = false;
       authCard.hidden = true;
+      levelCard.hidden = false;
       updateCardState();
     }
     function applyLogout() {
       loggedIn = false;
       accountBar.hidden = true;
       authCard.hidden = false;
+      levelCard.hidden = true;
       updateCardState();
     }
     document.getElementById("logout-btn").addEventListener("click", async () => {
