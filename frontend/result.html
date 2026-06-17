@@ -76,7 +76,7 @@
     function init() {
       const raw = sessionStorage.getItem("visa_quiz_last_result");
       if (!raw) {
-        loadingEl.innerHTML = '結果データが見つかりません。<br><a href="/">トップへ戻る</a>';
+        loadingEl.innerHTML = '結果データが見つかりません。<br><a href="/home.html">難易度選択へ戻る</a>';
         return;
       }
       const result = JSON.parse(raw);
