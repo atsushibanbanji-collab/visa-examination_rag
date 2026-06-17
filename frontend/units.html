@@ -30,7 +30,7 @@
       </section>
 
       <div class="btn-row">
-        <a class="btn btn-secondary" id="back-link" href="/">← トップに戻る</a>
+        <a class="btn btn-secondary" id="back-link" href="/home.html">← 難易度選択に戻る</a>
       </div>
     </main>
 
@@ -38,7 +38,7 @@
       <h2>エラー</h2>
       <p id="error-message"></p>
       <div class="btn-row">
-        <a class="btn btn-secondary" href="/">トップに戻る</a>
+        <a class="btn btn-secondary" href="/home.html">難易度選択に戻る</a>
       </div>
     </div>
   </div>
@@ -64,7 +64,7 @@
 
     // escapeHtml / levelLabel は common.js に共通化
 
-    document.getElementById("back-link").href = "/";
+    document.getElementById("back-link").href = "/home.html";
     load();
 
     async function load() {

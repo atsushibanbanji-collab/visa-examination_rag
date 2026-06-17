@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>ビザ検定</title>
+  <title>ビザ検定 - ログイン</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -27,18 +27,8 @@
       </div>
     </header>
 
-    <!-- ログイン中バー（未ログイン時は非表示） -->
-    <section class="card" id="account-bar" hidden>
-      <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
-        <span id="account-name" style="font-weight: 600;"></span>
-        <span>
-          <a href="/mypage.html" class="btn btn-secondary" style="text-decoration: none; padding: 6px 12px; font-size: 13px;">マイページ</a>
-          <button type="button" id="logout-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">ログアウト</button>
-        </span>
-      </div>
-    </section>
-
-    <!-- 認証カード（ログイン／新規登録。ログイン中は非表示） -->
+    <!-- 認証カード（ログイン／新規登録）。トップはログイン専用。
+         ログイン成功・既ログインなら難易度選択画面（home.html）へ遷移する。 -->
     <section class="card" id="auth-card">
       <div style="display: flex; gap: 8px; margin-bottom: 12px;">
         <button type="button" class="btn" id="tab-login">ログイン</button>
@@ -59,27 +49,12 @@
       </div>
     </section>
 
-    <section class="card" id="level-card" hidden>
-      <div class="level-grid" id="level-grid">
-        <div class="loading">読み込み中…</div>
-      </div>
-    </section>
-
   </div>
 
   <script>
-    const levelGrid = document.getElementById("level-grid");
-    const levelCard = document.getElementById("level-card");
-    const accountBar = document.getElementById("account-bar");
-    const accountName = document.getElementById("account-name");
-    const authCard = document.getElementById("auth-card");
+    const HOME_URL = "/home.html";   // ログイン後の遷移先（難易度選択画面）
     const authError = document.getElementById("auth-error");
 
-    const LEVEL_NAMES = { beginner: "初級", intermediate: "中級", advanced: "上級" };
-    const LEVEL_ORDER = ["beginner", "intermediate", "advanced"];
-
-    let levels = [];
-    let loggedIn = false;
     let authMode = "login"; // "login" | "register"
 
     // --- 認証UI ---
@@ -114,7 +89,7 @@
         }
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "失敗しました");
-        applyLogin(data);
+        location.href = HOME_URL;   // 難易度選択画面へ
       } catch (e) {
         authError.textContent = e.message;
         authError.hidden = false;
@@ -125,100 +100,16 @@
       if (e.key === "Enter") submitAuth();
     });
 
-    function applyLogin(user) {
-      loggedIn = true;
-      accountName.textContent = `${user.display_name} さん`;
-      accountBar.hidden = false;
-      authCard.hidden = true;
-      levelCard.hidden = false;
-      updateCardState();
-    }
-    function applyLogout() {
-      loggedIn = false;
-      accountBar.hidden = true;
-      authCard.hidden = false;
-      levelCard.hidden = true;
-      updateCardState();
-    }
-    document.getElementById("logout-btn").addEventListener("click", async () => {
-      await fetch("/api/auth/logout", { method: "POST" });
-      applyLogout();
-    });
-
-    // トップは常にログインフォームを表示する（自動入室・確認カードは出さない）。
-    // 有効セッションが残っていても破棄し、共有端末での取り違えを防ぐ。
+    // 既にログイン済みなら難易度選択画面へ送る（トップ＝ログイン専用のため）。
     async function checkSession() {
       try {
         const res = await fetch("/api/auth/me");
-        if (res.ok) await fetch("/api/auth/logout", { method: "POST" });
+        if (res.ok) location.href = HOME_URL;
       } catch (e) {}
-      applyLogout();  // どのパスでも必ずログインフォームを表示する
-    }
-
-    // --- 難易度カード ---
-    // ログイン状態で難易度カードの活性を切り替える（未ログインは淡色）。
-    function updateCardState() {
-      document.querySelectorAll(".level-card").forEach((el) => {
-        const lv = levels.find((x) => x.id === el.dataset.id);
-        if (!lv || !lv.available) return; // COMING SOON は常に淡色のまま
-        el.classList.toggle("disabled", !loggedIn);
-      });
-    }
-
-    // 難易度カードを押したら、その場で単元選択画面へ直行する。
-    function goToUnits(levelId) {
-      if (!loggedIn) {
-        document.getElementById("auth-email").focus();
-        return;
-      }
-      const params = new URLSearchParams({ level: levelId });
-      window.location.href = `/units.html?${params.toString()}`;
-    }
-
-    async function loadLevels() {
-      try {
-        // 観点メタのあるレベルから難易度を導出する（出題対象=ビザ種別単元のみ）
-        const res = await fetch("/api/rag/cells");
-        const data = await res.json();
-        const counts = {};
-        for (const cell of (data.cells || [])) {
-          counts[cell.level] = (counts[cell.level] || 0) + 1;
-        }
-        levels = LEVEL_ORDER.map((id) => ({
-          id,
-          name: LEVEL_NAMES[id] || id,
-          available: (counts[id] || 0) > 0,
-          unit_count: counts[id] || 0,
-        }));
-        renderLevels();
-      } catch (e) {
-        levelGrid.innerHTML = '<div class="empty">難易度情報の取得に失敗しました</div>';
-      }
-    }
-
-    function renderLevels() {
-      levelGrid.innerHTML = "";
-      for (const lv of levels) {
-        const div = document.createElement("div");
-        div.className = "level-card" + (lv.available ? "" : " disabled");
-        div.dataset.id = lv.id;
-
-        const meta = lv.available
-          ? `<div class="meta">${lv.unit_count}単元</div>`
-          : `<div class="coming-soon">COMING SOON</div>`;
-        div.innerHTML = `<h3>${lv.name}</h3>${meta}`;
-
-        if (lv.available) {
-          div.addEventListener("click", () => goToUnits(lv.id));
-        }
-        levelGrid.appendChild(div);
-      }
-      updateCardState(); // 初期反映（ログイン済みなら明るく・押せる状態に）
     }
 
     setAuthMode("login");
     checkSession();
-    loadLevels();
   </script>
 
   <!-- ===== DEV ONLY（撤去予定）: デモデータ生成ボタンの動作 ===== -->
