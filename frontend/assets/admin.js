@@ -20,6 +20,8 @@
   const historyCard = document.getElementById("history-card");
   const historyTitle = document.getElementById("history-title");
   const historyArea = document.getElementById("history-area");
+  const challengesArea = document.getElementById("challenges-area");
+  const challengeStatusFilter = document.getElementById("challenge-status-filter");
 
   // escapeHtml / fmtDate / levelLabel は common.js に共通化
 
@@ -53,6 +55,7 @@
       renderUsers(data.users || []);
       loadingEl.style.display = "none";
       contentEl.style.display = "block";
+      loadChallenges();
     } catch (e) {
       showError(`データの取得に失敗しました: ${e.message}`);
     }
@@ -157,6 +160,133 @@
       </table>
       <p class="muted hist-legend">行の色＝正答率（<span class="lg lg-high">緑：満点</span>／<span class="lg lg-mid">黄：61〜99%</span>／<span class="lg lg-low">赤：60%以下</span>）</p>
     `;
+  }
+
+  // ===== 異議申し立て（チャレンジ） =====
+  async function loadChallenges() {
+    const status = challengeStatusFilter ? challengeStatusFilter.value : "";
+    challengesArea.innerHTML = '<div class="loading">読み込み中…</div>';
+    try {
+      const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+      const data = await fetchJson(`/api/${ADMIN_TOKEN}/admin/challenges${qs}`);
+      renderChallenges(data.challenges || []);
+    } catch (e) {
+      challengesArea.innerHTML = `<div class="empty">取得に失敗しました: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  // スナップショット（設問・選択肢・正答・受験者の解答・解説）を整形する
+  function renderSnapshot(s) {
+    if (!s || !s.question) return "";
+    let body = `<div class="ch-question">${escapeHtml(s.question)}</div>`;
+    if (s.type === "fill_in") {
+      const correct = Array.isArray(s.correct_answers) ? s.correct_answers.join(" / ") : "";
+      const ua = Array.isArray(s.user_text_answers) ? s.user_text_answers.join(" / ") : "";
+      body += `<div class="ch-meta">正解例：${escapeHtml(correct)}</div>`;
+      body += `<div class="ch-meta">受験者の解答：${escapeHtml(ua) || "（未記入）"}（${s.is_correct ? "正解" : "不正解"}）</div>`;
+    } else {
+      const choices = Array.isArray(s.choices) ? s.choices : [];
+      const opts = choices.map((c, i) => {
+        const marks = [];
+        if (i === s.correct_choice) marks.push("正答");
+        if (i === s.user_choice) marks.push("受験者");
+        const tag = marks.length ? `（${marks.join("・")}）` : "";
+        return `<li class="${i === s.correct_choice ? "ch-correct" : ""}">${escapeHtml(c)}${tag}</li>`;
+      }).join("");
+      body += `<ul class="ch-choices">${opts}</ul>`;
+      body += `<div class="ch-meta">判定：${s.is_correct ? "正解" : "不正解"}</div>`;
+    }
+    if (s.explanation) body += `<div class="ch-meta">解説：${escapeHtml(s.explanation)}</div>`;
+    return body;
+  }
+
+  function renderChallenges(items) {
+    if (items.length === 0) {
+      challengesArea.innerHTML = '<div class="empty">該当する異議申し立てはありません</div>';
+      return;
+    }
+    const cards = items.map((ch) => {
+      const kind = CHALLENGE_KIND_LABEL[ch.kind] || "−";
+      const statusLabel = ch.status_label || CHALLENGE_STATUS_LABEL[ch.status] || ch.status;
+      // 操作ボタン: 未処理→認容/却下、未修正→クローズ、終端→なし
+      let actions = "";
+      if (ch.status === "open") {
+        actions = `
+          <button type="button" class="btn ch-accept" data-id="${ch.id}">認容（正解扱いに訂正）</button>
+          <button type="button" class="btn btn-secondary ch-reject" data-id="${ch.id}">却下</button>`;
+      } else if (ch.status === "accepted") {
+        actions = `<button type="button" class="btn btn-secondary ch-close" data-id="${ch.id}">クローズ（是正完了）</button>`;
+      }
+      const adminMsg = ch.admin_message
+        ? `<div class="ch-meta">受験者へのメッセージ：${escapeHtml(ch.admin_message)}</div>` : "";
+      const adminNote = ch.admin_note
+        ? `<div class="ch-meta">対応メモ：${escapeHtml(ch.admin_note)}</div>` : "";
+      const noAttempt = ch.attempt_id ? "" :
+        '<div class="ch-meta" style="color:var(--danger);">※受験未確定（中断）。認容しても採点反映はありません。</div>';
+      return `<div class="ch-card ch-card--${ch.status}">
+        <div class="ch-head">
+          <span class="ch-status ch-status--${ch.status}">${escapeHtml(statusLabel)}</span>
+          <span class="muted">${escapeHtml(ch.username)} ／ ${escapeHtml(ch.unit_name)}（${levelLabel(ch.level)}）／ ${fmtDate(ch.created_at)}</span>
+        </div>
+        <div class="ch-reason"><strong>申し立て（${escapeHtml(kind)}）：</strong>${escapeHtml(ch.reason || "")}</div>
+        ${renderSnapshot(ch.snapshot)}
+        ${noAttempt}${adminMsg}${adminNote}
+        <div class="ch-actions">${actions}</div>
+      </div>`;
+    }).join("");
+    challengesArea.innerHTML = cards;
+
+    challengesArea.querySelectorAll(".ch-accept").forEach((b) =>
+      b.addEventListener("click", () => resolveChallenge(b.dataset.id, "accept")));
+    challengesArea.querySelectorAll(".ch-reject").forEach((b) =>
+      b.addEventListener("click", () => resolveChallenge(b.dataset.id, "reject")));
+    challengesArea.querySelectorAll(".ch-close").forEach((b) =>
+      b.addEventListener("click", () => closeChallenge(b.dataset.id)));
+  }
+
+  async function resolveChallenge(id, action) {
+    const verb = action === "accept" ? "認容" : "却下";
+    if (!confirm(`このチャレンジを${verb}します。よろしいですか？` +
+        (action === "accept" ? "\n（当該設問が正解扱いに訂正され、満点化すれば通算満点に加算されます）" : ""))) return;
+    const adminMessage = prompt("受験者へのメッセージ（任意・本人に表示されます）", "") || null;
+    const adminNote = prompt("対応メモ（任意・内部用）", "") || null;
+    try {
+      const res = await fetch(`/api/${ADMIN_TOKEN}/admin/challenges/${id}/${action}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ admin_message: adminMessage, admin_note: adminNote }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "処理に失敗しました");
+      if (action === "accept" && data.scoring && data.scoring.became_perfect) {
+        alert("認容しました。採点を訂正し、満点として通算満点に加算しました。");
+      } else {
+        alert(`${verb}しました。`);
+      }
+      loadChallenges();
+    } catch (e) {
+      alert("失敗: " + e.message);
+    }
+  }
+
+  async function closeChallenge(id) {
+    if (!confirm("このチャレンジをクローズします。\n観点・プロンプトの是正をGitに反映済み、または是正不要と判断した場合に実施してください。")) return;
+    const adminNote = prompt("対応メモ（是正内容、または「是正不要：理由」など）", "") || null;
+    try {
+      const res = await fetch(`/api/${ADMIN_TOKEN}/admin/challenges/${id}/close`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ admin_note: adminNote }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "処理に失敗しました");
+      alert("クローズしました。");
+      loadChallenges();
+    } catch (e) {
+      alert("失敗: " + e.message);
+    }
+  }
+
+  if (challengeStatusFilter) {
+    challengeStatusFilter.addEventListener("change", loadChallenges);
   }
 
   load();

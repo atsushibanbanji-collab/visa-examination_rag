@@ -28,6 +28,14 @@
   const feedbackMark = document.getElementById("feedback-mark");
   const feedbackLabel = document.getElementById("feedback-label");
   const feedbackExplanation = document.getElementById("feedback-explanation-text");
+  // 異議申し立て（チャレンジ）
+  const challengeBtn = document.getElementById("challenge-btn");
+  const challengeDone = document.getElementById("challenge-done");
+  const challengeModal = document.getElementById("challenge-modal");
+  const challengeReason = document.getElementById("challenge-reason");
+  const challengeError = document.getElementById("challenge-error");
+  const challengeCancel = document.getElementById("challenge-cancel");
+  const challengeSubmit = document.getElementById("challenge-submit");
 
   if (!unit) {
     showError("単元が指定されていません。単元一覧から選んでください。");
@@ -55,6 +63,7 @@
   let unitMeta = null;
   let sessionId = null;    // RAG セッションID（採点・判定に必須）
   let genMetrics = null;   // RAG 生成メトリクス（結果画面で表示）
+  const challenged = new Set();  // 異議申し立て済みの設問ID（ボタン無効化用）
 
   // --- ヘッド／テイル分割 ---
   let totalExpected = 0;   // 最終的な総問数（開始時に確定）
@@ -197,6 +206,7 @@
         exp = `正解例: ${result.correct_answers.join(" / ")}\n` + exp;
       }
       feedbackExplanation.textContent = exp;
+      updateChallengeUi(q);
     } else {
       feedbackEl.style.display = "none";
     }
@@ -333,6 +343,83 @@
   }
 
   // escapeHtml は common.js に共通化
+
+  // --- 異議申し立て（チャレンジ） ---
+  // 申し立て済みなら「申し立て済み」表示、未申し立てならボタンを出す。
+  function updateChallengeUi(q) {
+    const done = challenged.has(q.id);
+    challengeDone.hidden = !done;
+    challengeBtn.style.display = done ? "none" : "inline-block";
+  }
+
+  function openChallengeModal() {
+    challengeReason.value = "";
+    challengeError.hidden = true;
+    const grading = challengeModal.querySelector('input[name="challenge-kind"][value="grading"]');
+    if (grading) grading.checked = true;
+    challengeModal.hidden = false;
+  }
+  function closeChallengeModal() {
+    challengeModal.hidden = true;
+  }
+
+  async function submitChallenge() {
+    const q = questions[currentIdx];
+    if (!q) return;
+    const reason = challengeReason.value.trim();
+    challengeError.hidden = true;
+    if (!reason) {
+      challengeError.textContent = "理由を入力してください。";
+      challengeError.hidden = false;
+      return;
+    }
+    const kindEl = challengeModal.querySelector('input[name="challenge-kind"]:checked');
+    const kind = kindEl ? kindEl.value : "grading";
+    const ans = answers[currentIdx];
+    const body = { session_id: sessionId, question_id: q.id, reason, kind };
+    if (q.type === "fill_in") {
+      body.text_answers = Array.isArray(ans) ? ans : [];
+    } else {
+      body.choice = typeof ans === "number" && ans >= 0 ? ans : null;
+    }
+    challengeSubmit.disabled = true;
+    challengeSubmit.textContent = "送信中…";
+    try {
+      const res = await fetch("/api/quiz/challenge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.status === 409) {
+        // 既に申し立て済み（再読込後など）。済み表示に揃える。
+        challenged.add(q.id);
+        closeChallengeModal();
+        updateChallengeUi(q);
+        alert("この問題には既に異議を申し立てています。");
+        return;
+      }
+      if (!res.ok) throw new Error(data.detail || "送信に失敗しました");
+      challenged.add(q.id);
+      closeChallengeModal();
+      updateChallengeUi(q);
+      alert("異議を申し立てました。管理者が確認します。");
+    } catch (e) {
+      challengeError.textContent = e.message || "送信に失敗しました";
+      challengeError.hidden = false;
+    } finally {
+      challengeSubmit.disabled = false;
+      challengeSubmit.textContent = "送信する";
+    }
+  }
+
+  challengeBtn.addEventListener("click", openChallengeModal);
+  challengeCancel.addEventListener("click", closeChallengeModal);
+  challengeSubmit.addEventListener("click", submitChallenge);
+  challengeModal.addEventListener("click", (e) => {
+    if (e.target === challengeModal) closeChallengeModal();  // 背景クリックで閉じる
+  });
 
   abortBtn.addEventListener("click", () => {
     const ok = confirm(

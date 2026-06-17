@@ -39,3 +39,18 @@ class RagContinueRequest(BaseModel):
     生成・追記する（ヘッド／テイル分割）。
     """
     session_id: str
+
+
+class ChallengeCreateRequest(BaseModel):
+    """出題・採点への異議申し立て（チャレンジ）の起票リクエスト。
+
+    受験中の解説パネルから起票する。設問スナップショットはサーバ側でセッションから
+    生成するため、ここでは設問の特定情報（session_id・question_id）と申し立て理由、
+    および起票時点の自分の解答（任意・スナップショットの参考用）だけを受ける。
+    """
+    session_id: str
+    question_id: str
+    reason: str = Field(..., min_length=1, max_length=1000)
+    kind: Optional[str] = None                # 'grading' | 'content' | 'both'（分類・任意）
+    choice: Optional[int] = None              # 起票時点の自分の解答（選択式）
+    text_answers: Optional[List[str]] = None  # 起票時点の自分の解答（穴埋め）

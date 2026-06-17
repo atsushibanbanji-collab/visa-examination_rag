@@ -187,6 +187,112 @@ chk(bad2.status_code == 404, "[rag] 不正sessionは404")
 hist = c.get("/api/history").json()["attempts"]
 chk(any(a["source"] == "rag" for a in hist), "[history] source=rag が記録される")
 
+# ============ チャレンジ（異議申し立て） ============
+# （_db は累計クリア検証で import 済み）
+# 新規に beginner e_visa を1回受験。先頭1問だけ誤答して 9/10 にする。
+ev_start = c.post("/api/rag/quiz/start", json={"level": "beginner", "unit": "e_visa"}).json()
+ev_sid = ev_start["session_id"]
+ev_cont = c.post("/api/rag/quiz/continue", json={"session_id": ev_sid}).json()
+ev_all = ev_start["questions"] + ev_cont["questions"]
+chk(len(ev_all) == 10, "[challenge] 準備: e_visa 10問")
+wrong_q = ev_all[0]   # choice=1（誤り）で回答する設問
+
+# 起票（受験中の解説パネル相当）: 誤答した設問の採点に異議
+chal = c.post("/api/quiz/challenge", json={
+    "session_id": ev_sid, "question_id": wrong_q["id"],
+    "reason": "この判定はおかしい", "kind": "grading", "choice": 1})
+chk(chal.status_code == 200 and chal.json().get("challenge_id"), "[challenge] 起票できる")
+chk("correct_choice" not in chal.json() and "snapshot" not in chal.json(),
+    "[challenge] 起票応答に正答・スナップショットを返さない")
+cid = chal.json()["challenge_id"]
+# 同一設問への再起票は 409（1設問×1ユーザー＝1件）
+chk(c.post("/api/quiz/challenge", json={
+    "session_id": ev_sid, "question_id": wrong_q["id"],
+    "reason": "再", "choice": 1}).status_code == 409, "[challenge] 同一設問の再起票は409")
+# 別の正解設問にも内容異議を起票（後でクローズ系の検証に使う）
+chal2 = c.post("/api/quiz/challenge", json={
+    "session_id": ev_sid, "question_id": ev_all[1]["id"],
+    "reason": "設問が事実と違う", "kind": "content", "choice": 0})
+cid2 = chal2.json()["challenge_id"]
+# さらに別の設問（却下用）
+chal3 = c.post("/api/quiz/challenge", json={
+    "session_id": ev_sid, "question_id": ev_all[2]["id"],
+    "reason": "却下されるやつ", "kind": "content", "choice": 0})
+cid3 = chal3.json()["challenge_id"]
+
+# 採点（9/10・未満点）。submit でチャレンジが attempt へ紐付く。
+ev_answers = [{"id": q["id"], "choice": (1 if i == 0 else 0)} for i, q in enumerate(ev_all)]
+ev_rs = c.post("/api/quiz/submit", json={"level": "beginner", "unit": "e_visa",
+               "session_id": ev_sid, "answers": ev_answers}).json()
+chk(ev_rs["score"] == 9 and ev_rs["passed"] is False, "[challenge] 採点9/10（未満点）")
+chk(ev_rs["unit_progress"]["perfect_count"] == 0, "[challenge] 認容前は通算満点0")
+ev_attempt_id = ev_rs["attempt_id"]
+
+# 受験者本人のチャレンジ一覧（マイページ）に未処理で出る
+mine = c.get("/api/my/challenges").json()["challenges"]
+chk(any(x["id"] == cid and x["status"] == "open" and x["status_label"] == "未処理" for x in mine),
+    "[challenge] マイページに未処理で表示")
+
+# 管理一覧（スナップショット込み）
+adm = c.get(f"/api/{T}/admin/challenges").json()["challenges"]
+ac = next((x for x in adm if x["id"] == cid), None)
+chk(ac is not None and ac["status"] == "open" and ac["snapshot"].get("question"),
+    "[challenge] 管理一覧にスナップショット込みで表示")
+# status フィルタ
+chk(all(x["status"] == "open" for x in
+        c.get(f"/api/{T}/admin/challenges?status=open").json()["challenges"]),
+    "[challenge] 管理一覧: statusフィルタ")
+
+# 認容 → 採点遡及訂正（9→10）・通算満点 +1
+acc = c.post(f"/api/{T}/admin/challenges/{cid}/accept",
+             json={"admin_message": "ご指摘どおり訂正しました"})
+chk(acc.status_code == 200 and acc.json()["scoring"]["became_perfect"] is True
+    and acc.json()["scoring"]["new_score"] == 10, "[challenge] 認容で9→10満点化")
+chk(_db.get_attempt_by_id(ev_attempt_id)["score"] == 10, "[challenge] 受験記録が10点に訂正")
+ev_prog = _db.get_progress_map_by_user_id(me["id"], "beginner", source=_db.SOURCE_RAG)
+chk(ev_prog.get("e_visa", {}).get("perfect_count") == 1, "[challenge] 認容で通算満点が1に")
+# 再認容は 409（冪等・二重加算しない）
+chk(c.post(f"/api/{T}/admin/challenges/{cid}/accept", json={}).status_code == 409,
+    "[challenge] 認容済みの再認容は409")
+# マイページに管理者メッセージ付きで反映
+mine2 = c.get("/api/my/challenges").json()["challenges"]
+mc = next((x for x in mine2 if x["id"] == cid), None)
+chk(mc and mc["status"] == "accepted" and mc["status_label"] == "未修正"
+    and mc["admin_message"] == "ご指摘どおり訂正しました",
+    "[challenge] マイページに認容と管理者メッセージが反映")
+
+# 認容（未修正）→ クローズ（手動・根本是正の完了印）
+clo = c.post(f"/api/{T}/admin/challenges/{cid}/close",
+             json={"admin_note": "観点summaryを修正済み"})
+chk(clo.status_code == 200, "[challenge] 未修正→クローズできる")
+chk(c.post(f"/api/{T}/admin/challenges/{cid}/close", json={}).status_code == 409,
+    "[challenge] クローズ済みの再クローズは409")
+
+# 内容異議（元々正解）を認容 → 採点は変わらない（became_perfect=False）
+acc2 = c.post(f"/api/{T}/admin/challenges/{cid2}/accept", json={})
+chk(acc2.status_code == 200 and acc2.json()["scoring"]["became_perfect"] is False
+    and acc2.json()["scoring"]["new_score"] is None,
+    "[challenge] 元々正解への内容異議は採点不変で認容")
+
+# 却下 → 終端。クローズはできない（accepted のみ）。
+rej = c.post(f"/api/{T}/admin/challenges/{cid3}/reject",
+             json={"admin_message": "原本どおりで誤りなし"})
+chk(rej.status_code == 200, "[challenge] 却下できる")
+chk(c.post(f"/api/{T}/admin/challenges/{cid3}/close", json={}).status_code == 409,
+    "[challenge] 却下後のクローズは409（accepted のみ）")
+chk(c.post(f"/api/{T}/admin/challenges/{cid3}/accept", json={}).status_code == 409,
+    "[challenge] 却下後の認容は409（終端）")
+# 却下後も同一設問へ再起票できない（UNIQUE）
+chk(c.post("/api/quiz/challenge", json={
+    "session_id": ev_sid, "question_id": ev_all[2]["id"],
+    "reason": "やっぱり納得いかない", "choice": 0}).status_code == 409,
+    "[challenge] 却下後も同一設問は再起票不可")
+# 認証必須（未ログインの起票は401）
+anon = TestClient(app)
+chk(anon.post("/api/quiz/challenge", json={
+    "session_id": ev_sid, "question_id": ev_all[0]["id"], "reason": "x"}).status_code == 401,
+    "[challenge] 未ログインの起票は401")
+
 # ============ 項目5: レベル別出題形式 ============
 from backend import rag_perspectives, rag_generator, rag_session_store
 rag_perspectives.load()
