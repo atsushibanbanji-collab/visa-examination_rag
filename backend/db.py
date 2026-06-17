@@ -191,6 +191,38 @@ def _init_db_postgres() -> None:
         cur.execute("ALTER TABLE unit_progress ADD COLUMN IF NOT EXISTS user_id BIGINT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_attempts_user_id ON attempts(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_unit_progress_user_id ON unit_progress(user_id)")
+
+        # チャレンジ（異議申し立て）。出題・採点への異議を受け付け、管理画面で裁定する。
+        # 設問本文・正答・解説は ephemeral な quiz_sessions にしか無いため snapshot に保存する。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS challenges (
+                id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                user_id         BIGINT  NOT NULL,
+                username        TEXT    NOT NULL,
+                session_id      TEXT    NOT NULL,
+                question_id     TEXT    NOT NULL,
+                attempt_id      BIGINT,
+                level           TEXT    NOT NULL,
+                unit_id         TEXT    NOT NULL,
+                source          TEXT    NOT NULL DEFAULT 'rag',
+                kind            TEXT,
+                reason          TEXT    NOT NULL,
+                snapshot        TEXT    NOT NULL,
+                status          TEXT    NOT NULL DEFAULT 'open',
+                scoring_applied INTEGER NOT NULL DEFAULT 0,
+                admin_message   TEXT,
+                admin_note      TEXT,
+                created_at      TEXT    NOT NULL,
+                resolved_at     TEXT,
+                closed_at       TEXT,
+                UNIQUE (user_id, question_id)
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_user_id ON challenges(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_attempt_id ON challenges(attempt_id)")
         conn.commit()
     finally:
         conn.close()
@@ -311,6 +343,38 @@ def _init_db_sqlite() -> None:
             cur.execute("ALTER TABLE unit_progress ADD COLUMN user_id INTEGER")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_attempts_user_id ON attempts(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_unit_progress_user_id ON unit_progress(user_id)")
+
+        # チャレンジ（異議申し立て）。出題・採点への異議を受け付け、管理画面で裁定する。
+        # 設問本文・正答・解説は ephemeral な quiz_sessions にしか無いため snapshot に保存する。
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS challenges (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         INTEGER NOT NULL,
+                username        TEXT    NOT NULL,
+                session_id      TEXT    NOT NULL,
+                question_id     TEXT    NOT NULL,
+                attempt_id      INTEGER,
+                level           TEXT    NOT NULL,
+                unit_id         TEXT    NOT NULL,
+                source          TEXT    NOT NULL DEFAULT 'rag',
+                kind            TEXT,
+                reason          TEXT    NOT NULL,
+                snapshot        TEXT    NOT NULL,
+                status          TEXT    NOT NULL DEFAULT 'open',
+                scoring_applied INTEGER NOT NULL DEFAULT 0,
+                admin_message   TEXT,
+                admin_note      TEXT,
+                created_at      TEXT    NOT NULL,
+                resolved_at     TEXT,
+                closed_at       TEXT,
+                UNIQUE (user_id, question_id)
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_user_id ON challenges(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_attempt_id ON challenges(attempt_id)")
         conn.commit()
     finally:
         conn.close()
@@ -861,4 +925,253 @@ def delete_user_account_records(user_id: int) -> None:
         conn.execute("DELETE FROM attempts WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM unit_progress WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM challenges WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
+# ----------------------------------------------------------------------
+# チャレンジ（異議申し立て）
+# ----------------------------------------------------------------------
+def get_attempt_by_id(attempt_id: int) -> Optional[dict]:
+    """受験1回分を id で取得（details は生JSON文字列のまま返す）。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, username, user_id, level, source, score, total, taken_at, details "
+            "FROM attempts WHERE id = ?",
+            (attempt_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def create_challenge(
+    user_id: int,
+    username: str,
+    session_id: str,
+    question_id: str,
+    level: str,
+    unit_id: str,
+    source: str,
+    kind: Optional[str],
+    reason: str,
+    snapshot_json: str,
+) -> Optional[int]:
+    """チャレンジを起票する。同一 (user_id, question_id) が既にあれば None を返す
+    （1設問×1ユーザー＝1件。却下後も再起票不可）。"""
+    now = _now_iso()
+    with get_conn() as conn:
+        exists = conn.execute(
+            "SELECT id FROM challenges WHERE user_id = ? AND question_id = ?",
+            (user_id, question_id),
+        ).fetchone()
+        if exists:
+            return None
+        sql = """
+            INSERT INTO challenges
+              (user_id, username, session_id, question_id, level, unit_id,
+               source, kind, reason, snapshot, status, scoring_applied, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 0, ?)
+            """
+        params = (
+            user_id, username, session_id, question_id, level, unit_id,
+            source, kind, reason, snapshot_json, now,
+        )
+        if IS_POSTGRES:
+            cur = conn.execute(sql.rstrip() + " RETURNING id", params)
+            return cur.fetchone()["id"]
+        cur = conn.execute(sql, params)
+        return cur.lastrowid
+
+
+def link_challenges_to_attempt(session_id: str, attempt_id: int, user_id: int) -> None:
+    """submit で受験が確定した直後、同一セッションの未紐付けチャレンジへ attempt_id を結ぶ。"""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE challenges SET attempt_id = ? "
+            "WHERE session_id = ? AND user_id = ? AND attempt_id IS NULL",
+            (attempt_id, session_id, user_id),
+        )
+
+
+def get_challenge(challenge_id: int) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM challenges WHERE id = ?", (challenge_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_challenges(status: Optional[str] = None) -> List[dict]:
+    """管理画面用のチャレンジ一覧（新しい順）。status 指定でフィルタ。"""
+    with get_conn() as conn:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM challenges WHERE status = ? ORDER BY created_at DESC, id DESC",
+                (status,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM challenges ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_challenges_by_user(user_id: int) -> List[dict]:
+    """受験者本人のチャレンジ一覧（マイページ用。新しい順）。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, question_id, level, unit_id, reason, kind, snapshot, status, "
+            "admin_message, created_at, resolved_at, closed_at "
+            "FROM challenges WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def _increment_perfect_count_conn(conn, username, level, unit_id, source, user_id, now) -> None:
+    """既存接続内で perfect_count を +1 し、単元クリア（通算満点）を再評価する。
+
+    採点の遡及訂正専用。streak_count・last_taken_at は触らない
+    （連続満点は情報用でクリア判定に使わないため、遡及で動かさない）。
+    """
+    from backend.config import UNIT_CLEAR_REQUIRED_STREAK
+    ensure_cols = """
+          (username, level, unit_id, source, perfect_count, streak_count, best_streak, last_taken_at, user_id)
+        VALUES (?, ?, ?, ?, 0, 0, 0, NULL, ?)
+        """
+    if IS_POSTGRES:
+        conn.execute(
+            "INSERT INTO unit_progress" + ensure_cols
+            + " ON CONFLICT (username, level, unit_id, source) DO NOTHING",
+            (username, level, unit_id, source, user_id),
+        )
+    else:
+        conn.execute(
+            "INSERT OR IGNORE INTO unit_progress" + ensure_cols,
+            (username, level, unit_id, source, user_id),
+        )
+    row = conn.execute(
+        "SELECT perfect_count, graduated_at FROM unit_progress "
+        "WHERE username = ? AND level = ? AND unit_id = ? AND source = ?",
+        (username, level, unit_id, source),
+    ).fetchone()
+    new_perfect = row["perfect_count"] + 1
+    graduated_at = row["graduated_at"]
+    if new_perfect >= UNIT_CLEAR_REQUIRED_STREAK and graduated_at is None:
+        graduated_at = now
+    conn.execute(
+        "UPDATE unit_progress SET perfect_count = ?, graduated_at = ? "
+        "WHERE username = ? AND level = ? AND unit_id = ? AND source = ?",
+        (new_perfect, graduated_at, username, level, unit_id, source),
+    )
+
+
+def accept_challenge(
+    challenge_id: int,
+    admin_message: Optional[str] = None,
+    admin_note: Optional[str] = None,
+) -> dict:
+    """open のチャレンジを認容し、採点を遡及訂正する（単一トランザクション・冪等）。
+
+    紐付く受験（attempt）があり、当該設問が不正解だった場合のみ「正解扱い」に反転して
+    score を再計算する。満点へ跨いだ場合のみ perfect_count を +1（単元クリアに反映）。
+    attempt が無い（中断起票）場合は採点反映なしでステータスのみ accepted にする。
+
+    戻り値: {"ok": bool, "error"?: str, "scoring": {applied, new_score, became_perfect}}
+    """
+    now = _now_iso()
+    with get_conn() as conn:
+        ch = conn.execute(
+            "SELECT * FROM challenges WHERE id = ?", (challenge_id,)
+        ).fetchone()
+        if ch is None:
+            return {"ok": False, "error": "not_found"}
+        if ch["status"] != "open":
+            return {"ok": False, "error": "not_open"}
+
+        scoring = {"applied": False, "new_score": None, "became_perfect": False}
+        attempt_id = ch["attempt_id"]
+        if attempt_id is not None and not ch["scoring_applied"]:
+            att = conn.execute(
+                "SELECT id, user_id, level, source, score, total, details "
+                "FROM attempts WHERE id = ?",
+                (attempt_id,),
+            ).fetchone()
+            details = None
+            if att is not None and att["details"]:
+                try:
+                    details = json.loads(att["details"])
+                except (ValueError, TypeError):
+                    details = None
+            if isinstance(details, dict):
+                answers = details.get("answers", [])
+                target = next(
+                    (a for a in answers if a.get("id") == ch["question_id"]), None
+                )
+                # 不正解だった設問のみ正解へ反転（②内容異議で元々正解なら採点変化なし）
+                if target is not None and not target.get("is_correct", False):
+                    target["is_correct"] = True
+                    new_score = sum(1 for a in answers if a.get("is_correct"))
+                    was_perfect = att["score"] == att["total"]
+                    if new_score > att["score"]:
+                        conn.execute(
+                            "UPDATE attempts SET score = ?, details = ? WHERE id = ?",
+                            (new_score, json.dumps(details, ensure_ascii=False), att["id"]),
+                        )
+                        scoring["new_score"] = new_score
+                        # 非満点→満点へ跨いだ時だけ通算満点を +1（二重計上しない）
+                        if new_score == att["total"] and not was_perfect:
+                            _increment_perfect_count_conn(
+                                conn, ch["username"], ch["level"], ch["unit_id"],
+                                ch["source"], att["user_id"], now,
+                            )
+                            scoring["became_perfect"] = True
+                    scoring["applied"] = True
+
+        conn.execute(
+            "UPDATE challenges SET status = 'accepted', scoring_applied = 1, "
+            "admin_message = ?, admin_note = ?, resolved_at = ? WHERE id = ?",
+            (admin_message, admin_note, now, challenge_id),
+        )
+        return {"ok": True, "scoring": scoring}
+
+
+def reject_challenge(
+    challenge_id: int,
+    admin_message: Optional[str] = None,
+    admin_note: Optional[str] = None,
+) -> dict:
+    """open のチャレンジを却下（終端）にする。採点は変えない。"""
+    now = _now_iso()
+    with get_conn() as conn:
+        ch = conn.execute(
+            "SELECT status FROM challenges WHERE id = ?", (challenge_id,)
+        ).fetchone()
+        if ch is None:
+            return {"ok": False, "error": "not_found"}
+        if ch["status"] != "open":
+            return {"ok": False, "error": "not_open"}
+        conn.execute(
+            "UPDATE challenges SET status = 'rejected', admin_message = ?, "
+            "admin_note = ?, resolved_at = ? WHERE id = ?",
+            (admin_message, admin_note, now, challenge_id),
+        )
+        return {"ok": True}
+
+
+def close_challenge(challenge_id: int, admin_note: Optional[str] = None) -> dict:
+    """accepted（未修正）のチャレンジを手動でクローズ（終端）にする。根本是正の完了印。"""
+    now = _now_iso()
+    with get_conn() as conn:
+        ch = conn.execute(
+            "SELECT status, admin_note FROM challenges WHERE id = ?", (challenge_id,)
+        ).fetchone()
+        if ch is None:
+            return {"ok": False, "error": "not_found"}
+        if ch["status"] != "accepted":
+            return {"ok": False, "error": "not_accepted"}
+        note = admin_note if admin_note is not None else ch["admin_note"]
+        conn.execute(
+            "UPDATE challenges SET status = 'closed', admin_note = ?, closed_at = ? WHERE id = ?",
+            (note, now, challenge_id),
+        )
+        return {"ok": True}

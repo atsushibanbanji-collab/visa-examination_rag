@@ -26,7 +26,13 @@ from backend.config import (
     VISA_TYPE_UNITS,
 )
 from backend.db import SOURCE_RAG
-from backend.models import CheckRequest, RagContinueRequest, RagStartRequest, SubmitRequest
+from backend.models import (
+    ChallengeCreateRequest,
+    CheckRequest,
+    RagContinueRequest,
+    RagStartRequest,
+    SubmitRequest,
+)
 
 router = APIRouter()
 
@@ -325,6 +331,10 @@ def submit_quiz(req: SubmitRequest, user: dict = Depends(auth.get_current_user))
         user_id=user["id"],
     )
 
+    # 受験中に起票されたチャレンジ（異議申し立て）を、この確定受験へ後付けで紐付ける。
+    # 認容時の採点遡及訂正はこの attempt を辿って行う。
+    db.link_challenges_to_attempt(req.session_id, attempt_id, user["id"])
+
     # 単元進捗を更新（満点で連続+1、非満点で0リセット）
     unit_progress = None
     if req.unit:
@@ -357,3 +367,93 @@ def get_history(user: dict = Depends(auth.get_current_user)):
         "username": user["display_name"],
         "attempts": db.get_history_by_user_id(user["id"]),
     }
+
+
+# ----------------------------------------------------------------------
+# チャレンジ（異議申し立て）
+# ----------------------------------------------------------------------
+# ステータス内部コード → 受験者向け表示ラベル
+_CHALLENGE_STATUS_LABEL = {
+    "open": "未処理",
+    "accepted": "未修正",
+    "closed": "クローズ",
+    "rejected": "却下",
+}
+
+
+@router.post("/api/quiz/challenge")
+def create_challenge(
+    req: ChallengeCreateRequest, user: dict = Depends(auth.get_current_user)
+):
+    """出題・採点への異議申し立て（チャレンジ）を起票する（受験中の解説パネルから）。
+
+    設問スナップショット（本文・正答・解説込み）をサーバ側でセッションから生成して保存する。
+    正答は応答に載せない（受理可否と challenge_id のみ返す）。同一設問への再起票は 409。
+    """
+    if not req.session_id or not req.question_id:
+        raise HTTPException(400, "session_id と question_id が必要です。")
+    reason = (req.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "申し立ての理由を入力してください。")
+
+    session = rag_session_store.get_session(req.session_id)
+    if session is None:
+        raise HTTPException(404, "セッションが見つからない、または期限切れです。")
+    # セッションの帰属（メール）を確認し、他人のセッションへの起票を塞ぐ
+    if session.get("username") != user["email"]:
+        raise HTTPException(403, "このセッションに対する操作は許可されていません。")
+    q = rag_session_store.question_in_session(session, req.question_id)
+    if q is None:
+        raise HTTPException(404, f"問題が見つからない: id={req.question_id}")
+
+    snapshot = rag_session_store.build_challenge_snapshot(
+        q, choice=req.choice, text_answers=req.text_answers
+    )
+    challenge_id = db.create_challenge(
+        user_id=user["id"],
+        username=user["email"],
+        session_id=req.session_id,
+        question_id=req.question_id,
+        level=session["level"],
+        unit_id=session["unit_id"],
+        source=SOURCE_RAG,
+        kind=req.kind,
+        reason=reason,
+        snapshot_json=json.dumps(snapshot, ensure_ascii=False),
+    )
+    if challenge_id is None:
+        raise HTTPException(409, "この問題には既に異議を申し立てています。")
+    return {"ok": True, "challenge_id": challenge_id}
+
+
+@router.get("/api/my/challenges")
+def my_challenges(user: dict = Depends(auth.get_current_user)):
+    """ログイン中ユーザー自身のチャレンジ一覧（マイページ用）。
+
+    設問本文・理由・ステータス（表示ラベル）・裁定結果・管理者メッセージを返す。
+    正答・解説は受験中に既に提示済みのため設問本文のみ要約として返す。
+    """
+    items = []
+    for c in db.list_challenges_by_user(user["id"]):
+        snap = {}
+        try:
+            snap = json.loads(c.get("snapshot") or "{}")
+        except (ValueError, TypeError):
+            snap = {}
+        items.append(
+            {
+                "id": c["id"],
+                "level": c["level"],
+                "unit_id": c["unit_id"],
+                "question": snap.get("question", ""),
+                "reason": c.get("reason"),
+                "kind": c.get("kind"),
+                "status": c["status"],
+                "status_label": _CHALLENGE_STATUS_LABEL.get(c["status"], c["status"]),
+                "admin_message": c.get("admin_message"),
+                "created_at": c.get("created_at"),
+                "resolved_at": c.get("resolved_at"),
+                "closed_at": c.get("closed_at"),
+            }
+        )
+    return {"challenges": items}

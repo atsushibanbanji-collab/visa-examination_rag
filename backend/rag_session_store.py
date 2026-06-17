@@ -219,3 +219,32 @@ def question_in_session(session: dict, qid: str) -> Optional[dict]:
         if q["id"] == qid:
             return q
     return None
+
+
+def build_challenge_snapshot(
+    q: dict,
+    choice: Optional[int] = None,
+    text_answers: Optional[List[str]] = None,
+) -> dict:
+    """チャレンジ（異議申し立て）起票用に、設問の完全なスナップショットを作る。
+
+    設問本文・正答・解説は ephemeral なセッションにしか無いため、起票時にここで保存する。
+    管理画面のみで表示する前提（受験者の起票応答には正答を載せない）。
+    起票時点の自分の解答（choice / text_answers）も参考情報として同梱する。
+    """
+    graded = grade_answer(q, choice=choice, text_answers=text_answers)
+    snap = {
+        "question": q.get("question", ""),
+        "type": q.get("type", "choice"),
+        "explanation": q.get("explanation", ""),
+        "perspective_id": q.get("perspective_id", ""),
+        "source_pages": q.get("source_pages", []),
+        "user_choice": choice,
+        "user_text_answers": text_answers,
+        "is_correct": graded["is_correct"],
+        "correct_choice": graded["correct_choice"],
+        "correct_answers": graded["correct_answers"],
+    }
+    if q.get("type") != "fill_in":
+        snap["choices"] = q.get("choices", [])
+    return snap

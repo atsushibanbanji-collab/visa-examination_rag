@@ -8,6 +8,9 @@ RAG出題専用。サマリー・受験回数・最高点・平均点・全件�
 """
 from __future__ import annotations
 
+import json
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -149,3 +152,108 @@ def admin_reset_password(token: str, user_id: int, req: AdminPasswordResetReques
         raise HTTPException(404, "アカウントが見つかりません。")
     db.update_user_password(user_id, auth.hash_password(req.new_password))
     return {"ok": True, "user_id": user_id}
+
+
+# ----------------------------------------------------------------------
+# チャレンジ（異議申し立て）の裁定
+# ----------------------------------------------------------------------
+# 内部コード → 表示ラベル（管理画面用）
+_CHALLENGE_STATUS_LABEL = {
+    "open": "未処理",
+    "accepted": "未修正",
+    "closed": "クローズ",
+    "rejected": "却下",
+}
+
+
+class AdminChallengeResolveRequest(BaseModel):
+    """認容／却下のリクエスト。受験者向けメッセージと内部の対応メモ（任意）。"""
+    admin_message: Optional[str] = Field(None, max_length=2000)
+    admin_note: Optional[str] = Field(None, max_length=2000)
+
+
+class AdminChallengeCloseRequest(BaseModel):
+    """クローズ（根本是正の完了印）のリクエスト。対応メモ（任意）。"""
+    admin_note: Optional[str] = Field(None, max_length=2000)
+
+
+@router.get("/api/{token}/admin/challenges")
+def admin_challenges(token: str, status: Optional[str] = None):
+    """チャレンジ一覧（新しい順）。status 指定でフィルタ。
+
+    設問スナップショット（本文・正答・解説）込みで返す（裁定の判断材料）。
+    """
+    _check_token(token)
+    name_map = _unit_name_map()
+    items = []
+    for c in db.list_challenges(status=status):
+        try:
+            snap = json.loads(c.get("snapshot") or "{}")
+        except (ValueError, TypeError):
+            snap = {}
+        items.append(
+            {
+                "id": c["id"],
+                "username": c["username"],
+                "level": c["level"],
+                "unit_id": c["unit_id"],
+                "unit_name": name_map.get(c["unit_id"], c["unit_id"]),
+                "question_id": c["question_id"],
+                "attempt_id": c.get("attempt_id"),
+                "kind": c.get("kind"),
+                "reason": c.get("reason"),
+                "snapshot": snap,
+                "status": c["status"],
+                "status_label": _CHALLENGE_STATUS_LABEL.get(c["status"], c["status"]),
+                "admin_message": c.get("admin_message"),
+                "admin_note": c.get("admin_note"),
+                "created_at": c.get("created_at"),
+                "resolved_at": c.get("resolved_at"),
+                "closed_at": c.get("closed_at"),
+            }
+        )
+    return {"challenges": items}
+
+
+@router.post("/api/{token}/admin/challenges/{challenge_id}/accept")
+def admin_accept_challenge(token: str, challenge_id: int, req: AdminChallengeResolveRequest):
+    """チャレンジを認容する。当該設問を正解扱いに訂正し、満点化すれば通算満点に +1。"""
+    _check_token(token)
+    res = db.accept_challenge(
+        challenge_id, admin_message=req.admin_message, admin_note=req.admin_note
+    )
+    if not res["ok"]:
+        if res.get("error") == "not_found":
+            raise HTTPException(404, "チャレンジが見つかりません。")
+        raise HTTPException(409, "未処理のチャレンジのみ認容できます。")
+    return {"ok": True, "scoring": res.get("scoring")}
+
+
+@router.post("/api/{token}/admin/challenges/{challenge_id}/reject")
+def admin_reject_challenge(token: str, challenge_id: int, req: AdminChallengeResolveRequest):
+    """チャレンジを却下する（終端）。採点は変えない。"""
+    _check_token(token)
+    res = db.reject_challenge(
+        challenge_id, admin_message=req.admin_message, admin_note=req.admin_note
+    )
+    if not res["ok"]:
+        if res.get("error") == "not_found":
+            raise HTTPException(404, "チャレンジが見つかりません。")
+        raise HTTPException(409, "未処理のチャレンジのみ却下できます。")
+    return {"ok": True}
+
+
+@router.post("/api/{token}/admin/challenges/{challenge_id}/close")
+def admin_close_challenge(token: str, challenge_id: int, req: AdminChallengeCloseRequest):
+    """認容済み（未修正）のチャレンジを手動でクローズする（根本是正の完了印・終端）。
+
+    観点メタ／システムプロンプトの是正自体はサイト外（Git push）で行い、反映後に
+    管理者がここでクローズする。対応メモに是正内容（または是正不要の理由）を残す。
+    """
+    _check_token(token)
+    res = db.close_challenge(challenge_id, admin_note=req.admin_note)
+    if not res["ok"]:
+        if res.get("error") == "not_found":
+            raise HTTPException(404, "チャレンジが見つかりません。")
+        raise HTTPException(409, "認容済み（未修正）のチャレンジのみクローズできます。")
+    return {"ok": True}
