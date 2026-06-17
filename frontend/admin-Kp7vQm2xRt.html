@@ -26,6 +26,22 @@
         <div id="history-area"></div>
       </section>
 
+      <section class="card" id="challenges-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+          <h2 style="margin:0;">異議申し立て（チャレンジ）</h2>
+          <label class="muted" style="font-size:13px;">状態:
+            <select id="challenge-status-filter">
+              <option value="">すべて</option>
+              <option value="open">未処理</option>
+              <option value="accepted">未修正</option>
+              <option value="closed">クローズ</option>
+              <option value="rejected">却下</option>
+            </select>
+          </label>
+        </div>
+        <div id="challenges-area"><div class="loading">読み込み中…</div></div>
+      </section>
+
     </main>
 
     <div id="error-area" class="card" style="display:none;">

@@ -38,3 +38,18 @@ function pillClass(pct) {
   if (pct >= 60) return "mid";
   return "low";
 }
+
+// チャレンジ（異議申し立て）ステータス内部コード → 表示ラベル
+const CHALLENGE_STATUS_LABEL = {
+  open: "未処理",
+  accepted: "未修正",
+  closed: "クローズ",
+  rejected: "却下",
+};
+
+// チャレンジ種別 → 表示ラベル
+const CHALLENGE_KIND_LABEL = {
+  grading: "採点への異議",
+  content: "出題内容への異議",
+  both: "採点・内容への異議",
+};

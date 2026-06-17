@@ -1144,3 +1144,88 @@ code {
 .hist-legend .lg-high { background: var(--success-bg); color: var(--success); }
 .hist-legend .lg-mid  { background: #fff4e0; color: #8a6d2f; }
 .hist-legend .lg-low  { background: var(--danger-bg); color: var(--danger); }
+
+/* ===== 異議申し立て（チャレンジ） ===== */
+/* 受験画面: 解説パネル内の申し立てボタン */
+.feedback-actions {
+  padding: 12px 16px 14px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.btn-challenge { font-size: .82rem; padding: 6px 14px; }
+.challenge-done { font-size: .82rem; color: var(--success); font-weight: 600; }
+
+/* モーダル */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+.modal-overlay[hidden] { display: none; }
+.modal-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 24px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal-card h2 { margin: 0 0 10px; font-size: 18px; color: var(--primary); }
+.modal-card textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  resize: vertical;
+}
+.challenge-kind { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.challenge-kind label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: 14px; }
+.challenge-kind input { width: auto; }
+
+/* ステータスバッジ（マイページ・管理画面共通） */
+.ch-status {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #eef0f3;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ch-status--open     { background: #fff4e0; color: #8a6d2f; }
+.ch-status--accepted { background: #e7f0fb; color: var(--primary); }
+.ch-status--closed   { background: var(--success-bg); color: var(--success); }
+.ch-status--rejected { background: var(--danger-bg); color: var(--danger); }
+
+/* 管理画面: チャレンジカード */
+.ch-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 14px;
+  background: var(--surface);
+}
+.ch-card--open { border-left: 4px solid #c98a16; }
+.ch-card--accepted { border-left: 4px solid var(--primary); }
+.ch-card--closed { border-left: 4px solid var(--success); }
+.ch-card--rejected { border-left: 4px solid var(--danger); }
+.ch-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.ch-reason { margin: 6px 0; }
+.ch-question { font-weight: 600; margin: 8px 0 4px; }
+.ch-choices { margin: 4px 0; padding-left: 20px; }
+.ch-choices li.ch-correct { color: var(--success); font-weight: 600; }
+.ch-meta { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.ch-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.ch-actions .btn { font-size: .82rem; padding: 6px 14px; }
