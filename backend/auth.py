@@ -53,13 +53,17 @@ def _token_hash(token: str) -> str:
 
 
 def issue_session(response: Response, user_id: int) -> None:
-    """新規セッションを発行し、HttpOnly Cookie をレスポンスへ載せる。"""
+    """新規セッションを発行し、HttpOnly Cookie をレスポンスへ載せる。
+
+    Cookie には max_age/expires を付けず**セッションCookie**とする。ブラウザ／タブを
+    閉じると失効するため、共有端末で次の利用者が前の人のアカウントへ自動ログインして
+    しまう取り違えを防ぐ。DB側のセッションTTL（SESSION_TTL_SEC）はサーバ側の上限として残す。
+    """
     token = secrets.token_urlsafe(32)
     db.create_auth_session(_token_hash(token), user_id, ttl_sec=SESSION_TTL_SEC)
     response.set_cookie(
         SESSION_COOKIE,
         token,
-        max_age=SESSION_TTL_SEC,
         httponly=True,
         samesite="lax",
         path="/",

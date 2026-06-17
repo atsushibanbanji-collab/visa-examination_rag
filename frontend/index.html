@@ -38,6 +38,15 @@
       </div>
     </section>
 
+    <!-- 前回ログインの確認（有効セッションがある場合のみ表示。自動入室はしない） -->
+    <section class="card" id="resume-card" hidden>
+      <p id="resume-name" style="font-weight: 600; margin-bottom: 12px;"></p>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button type="button" class="btn" id="resume-continue">このまま続ける</button>
+        <button type="button" class="btn btn-secondary" id="resume-switch">別のアカウントでログイン</button>
+      </div>
+    </section>
+
     <!-- 認証カード（ログイン／新規登録。ログイン中は非表示） -->
     <section class="card" id="auth-card">
       <div style="display: flex; gap: 8px; margin-bottom: 12px;">
@@ -74,6 +83,8 @@
     const accountName = document.getElementById("account-name");
     const authCard = document.getElementById("auth-card");
     const authError = document.getElementById("auth-error");
+    const resumeCard = document.getElementById("resume-card");
+    const resumeName = document.getElementById("resume-name");
 
     const LEVEL_NAMES = { beginner: "初級", intermediate: "中級", advanced: "上級" };
     const LEVEL_ORDER = ["beginner", "intermediate", "advanced"];
@@ -81,6 +92,7 @@
     let levels = [];
     let loggedIn = false;
     let authMode = "login"; // "login" | "register"
+    let pendingUser = null;  // 有効セッションはあるが入室確認待ちのユーザー
 
     // --- 認証UI ---
     function setAuthMode(mode) {
@@ -127,16 +139,20 @@
 
     function applyLogin(user) {
       loggedIn = true;
+      pendingUser = null;
       accountName.textContent = `${user.display_name} さん`;
       accountBar.hidden = false;
       authCard.hidden = true;
+      resumeCard.hidden = true;
       levelCard.hidden = false;
       updateCardState();
     }
     function applyLogout() {
       loggedIn = false;
+      pendingUser = null;
       accountBar.hidden = true;
       authCard.hidden = false;
+      resumeCard.hidden = true;
       levelCard.hidden = true;
       updateCardState();
     }
@@ -145,10 +161,30 @@
       applyLogout();
     });
 
+    // 有効セッションがあっても自動入室はせず、本人にアカウントの選択を委ねる。
+    function showResumePrompt(user) {
+      loggedIn = false;
+      pendingUser = user;
+      resumeName.textContent = `前回は ${user.display_name} さんでログインしています。このまま続けますか？`;
+      resumeCard.hidden = false;
+      accountBar.hidden = true;
+      authCard.hidden = true;
+      levelCard.hidden = true;
+      updateCardState();
+    }
+    document.getElementById("resume-continue").addEventListener("click", () => {
+      if (pendingUser) applyLogin(pendingUser);
+    });
+    document.getElementById("resume-switch").addEventListener("click", async () => {
+      // 別アカウントで入り直すため、現在のセッションを破棄してログインフォームへ。
+      try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) {}
+      applyLogout();
+    });
+
     async function checkSession() {
       try {
         const res = await fetch("/api/auth/me");
-        if (res.ok) applyLogin(await res.json());
+        if (res.ok) showResumePrompt(await res.json());
         else applyLogout();
       } catch (e) { applyLogout(); }
     }
