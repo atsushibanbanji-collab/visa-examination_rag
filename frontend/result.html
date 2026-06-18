@@ -256,7 +256,7 @@
         const pct = Math.round((a.score / a.total) * 100);
         const kind = a.unit
           ? escapeHtml(unitNameMap[a.unit] || a.unit)
-          : `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
+          : escapeHtml(levelLabel(a.level));
         return `<tr>
           <td>${fmtDate(a.taken_at)}</td>
           <td>${kind}</td>

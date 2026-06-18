@@ -859,8 +859,6 @@ code {
 }
 .unit-last-none { font-style: italic; opacity: .8; }
 
-/* 履歴表: 種別バッジ */
-.hist-kind.legacy { color: var(--muted); }
 
 @media (max-width: 480px) {
   .app-shell { padding: 20px 16px 60px; }

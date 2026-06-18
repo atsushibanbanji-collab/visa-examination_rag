@@ -143,7 +143,7 @@
     const rows = attempts.map((a) => {
       const kind = a.unit_name
         ? escapeHtml(a.unit_name)
-        : `<span class="hist-kind legacy">${levelLabel(a.level)}</span>`;
+        : escapeHtml(levelLabel(a.level));
       const perfectNo = a.perfect_no
         ? `（${a.perfect_no}/${requiredCount}）`
         : "";
