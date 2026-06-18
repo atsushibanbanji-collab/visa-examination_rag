@@ -42,7 +42,7 @@
     return;
   }
 
-  const levelName = { beginner: "初級", intermediate: "中級", advanced: "上級" }[level] || level;
+  const levelName = levelLabel(level);  // common.js
   userLabel.textContent = `（${levelName}）`;
   // 表示名はログイン情報から取得して反映する
   fetch("/api/auth/me").then((r) => {

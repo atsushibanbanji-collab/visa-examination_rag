@@ -13,7 +13,7 @@ attempts / unit_progress を db.py の正規関数で直接書き込む。LLMは
   2. main.py の include_router(dev_router) を削除
   3. frontend/index.html の DEV ONLY ブロックを削除
   4. config.py の DEMO_SEED_ENABLED を削除
-  5. db.py の delete_user_records / save_attempt の taken_at 引数は残しても害なし
+  5. db.py の save_attempt の taken_at 引数は残しても害なし
 """
 from __future__ import annotations
 
@@ -87,7 +87,6 @@ def _details_json(unit: str, score: int, total: int) -> str:
         {
             "meta": {
                 "unit": unit,
-                "is_graduation": False,
                 "source": SOURCE_RAG,
                 "test": True,
                 "seeded": True,

@@ -20,6 +20,7 @@ from backend import auth, db
 from backend import rag_generator, rag_perspectives, rag_session_store, rag_source
 from backend.config import (
     ALLOWED_LEVELS,
+    CHALLENGE_STATUS_LABELS,
     RAG_HEAD_COUNT,
     RAG_QUESTIONS_PER_QUIZ,
     UNIT_CLEAR_REQUIRED_STREAK,
@@ -303,7 +304,6 @@ def submit_quiz(req: SubmitRequest, user: dict = Depends(auth.get_current_user))
         {
             "meta": {
                 "unit": req.unit,
-                "is_graduation": False,
                 "source": SOURCE_RAG,
                 "metrics": session_meta,
             },
@@ -372,15 +372,6 @@ def get_history(user: dict = Depends(auth.get_current_user)):
 # ----------------------------------------------------------------------
 # チャレンジ（異議申し立て）
 # ----------------------------------------------------------------------
-# ステータス内部コード → 受験者向け表示ラベル
-_CHALLENGE_STATUS_LABEL = {
-    "open": "未処理",
-    "accepted": "未修正",
-    "closed": "クローズ",
-    "rejected": "却下",
-}
-
-
 @router.post("/api/quiz/challenge")
 def create_challenge(
     req: ChallengeCreateRequest, user: dict = Depends(auth.get_current_user)
@@ -449,7 +440,7 @@ def my_challenges(user: dict = Depends(auth.get_current_user)):
                 "reason": c.get("reason"),
                 "kind": c.get("kind"),
                 "status": c["status"],
-                "status_label": _CHALLENGE_STATUS_LABEL.get(c["status"], c["status"]),
+                "status_label": CHALLENGE_STATUS_LABELS.get(c["status"], c["status"]),
                 "admin_message": c.get("admin_message"),
                 "created_at": c.get("created_at"),
                 "resolved_at": c.get("resolved_at"),
