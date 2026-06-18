@@ -64,7 +64,6 @@
 
     // escapeHtml / levelLabel は common.js に共通化
 
-    document.getElementById("back-link").href = "/home.html";
     load();
 
     async function load() {
@@ -90,13 +89,7 @@
       }
     }
 
-    function fmtDateShort(iso) {
-      if (!iso) return null;
-      const d = new Date(iso);
-      if (isNaN(d)) return null;
-      const pad = n => String(n).padStart(2, "0");
-      return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())}`;
-    }
+    // fmtDateShort は common.js に共通化
 
     function render(data) {
       const summary = document.getElementById("progress-summary");

@@ -63,9 +63,17 @@ RAG_SESSION_TTL_SEC = int(os.environ.get("RAG_SESSION_TTL_SEC", "7200"))  # セ�
 # 撤去箇所: この定数 / backend/routes_dev.py / main.py の include / index.html のボタン
 DEMO_SEED_ENABLED = os.environ.get("DEMO_SEED_ENABLED", "true").lower() == "true"
 # ------------------------------------------------------------------------------
-RAG_VERIFY_PASS = os.environ.get("RAG_VERIFY_PASS", "false").lower() == "true"  # 生成→検証2パス（既定off）
 RAG_MAX_TOKENS = int(os.environ.get("RAG_MAX_TOKENS", "4000"))
 # 原本PDFは2-up（1物理ページに論理2ページ）。論理ページ→物理ページの除数。
 SOURCE_PDF_PATH = SOURCE_DIR / "visa_guide_v22_1.pdf"
 SOURCE_TXT_PATH = SOURCE_DIR / "visa_guide_v22_1.txt"
 SOURCE_PAGES_PER_SHEET = int(os.environ.get("SOURCE_PAGES_PER_SHEET", "2"))
+
+# --- チャレンジ（異議申し立て）ステータスの表示ラベル（内部コード→日本語）---
+# routes_quiz / routes_admin が参照する単一の真実源（frontend/common.js にも同義の表あり）。
+CHALLENGE_STATUS_LABELS = {
+    "open": "未処理",
+    "accepted": "未修正",
+    "closed": "クローズ",
+    "rejected": "却下",
+}

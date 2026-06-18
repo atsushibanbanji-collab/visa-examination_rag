@@ -392,7 +392,7 @@ def save_attempt(
 ) -> int:
     """受験1回分を保存する。
 
-    details は呼び出し側で組み立てた JSON 文字列。単元情報（unit / is_graduation）と
+    details は呼び出し側で組み立てた JSON 文字列。単元情報（unit）と
     RAG生成メタ（レイテンシ・トークン等）はこの details JSON の中に格納する。
     source は 'pool'（固定プール） / 'rag'（RAG）。
     taken_at は通常未指定（現在時刻）。デモデータ生成（routes_dev）が過去日時を
@@ -412,26 +412,14 @@ def save_attempt(
         return cur.lastrowid
 
 
-def delete_user_records(username: str) -> int:
-    """指定受験者の attempts / unit_progress を全削除し、削除した attempts 行数を返す。
-
-    デモデータの再生成（routes_dev）前の掃除に使う。通常運用の経路からは呼ばない。
-    """
-    with get_conn() as conn:
-        cur = conn.execute("DELETE FROM attempts WHERE username = ?", (username,))
-        n = cur.rowcount
-        conn.execute("DELETE FROM unit_progress WHERE username = ?", (username,))
-        return n
-
-
 def _extract_attempt_meta(details_raw: Optional[str]) -> dict:
     """details JSON から履歴表示用のメタ情報を取り出す。
 
     details 構造（本リポジトリ）:
-      {"meta": {"unit": "...", "is_graduation": bool, "metrics": {...}}, "answers": [...]}
-    壊れた JSON では unit=None / is_graduation=False / metrics=None を返す。
+      {"meta": {"unit": "...", "metrics": {...}}, "answers": [...]}
+    壊れた JSON では unit=None / metrics=None を返す。
     """
-    meta = {"unit": None, "is_graduation": False, "metrics": None}
+    meta = {"unit": None, "metrics": None}
     if not details_raw:
         return meta
     try:
@@ -441,71 +429,13 @@ def _extract_attempt_meta(details_raw: Optional[str]) -> dict:
     if isinstance(parsed, dict):
         m = parsed.get("meta") or {}
         meta["unit"] = m.get("unit")
-        meta["is_graduation"] = bool(m.get("is_graduation", False))
         meta["metrics"] = m.get("metrics")
     return meta
-
-
-def get_history_for_user(username: str, limit: int = 50):
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, level, source, score, total, taken_at, details
-            FROM attempts
-            WHERE username = ?
-            ORDER BY taken_at DESC, id DESC
-            LIMIT ?
-            """,
-            (username, limit),
-        ).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            meta = _extract_attempt_meta(d.pop("details", None))
-            d.update(meta)
-            out.append(d)
-        return out
-
-
-def get_all_unit_progress(source: str = SOURCE_POOL):
-    """全ユーザーの単元進捗を返す（管理画面の受験者一覧用）。
-
-    指定 source（既定は比較用に分離している 'pool' / 'rag'）の進捗行を、
-    受験者名でまとめやすいよう username 昇順で返す。
-    """
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT username, level, unit_id, perfect_count, streak_count,
-                   best_streak, last_taken_at, graduated_at
-            FROM unit_progress
-            WHERE source = ?
-            ORDER BY username ASC
-            """,
-            (source,),
-        ).fetchall()
-        return [dict(r) for r in rows]
 
 
 # ----------------------------------------------------------------------
 # 単元進捗
 # ----------------------------------------------------------------------
-def get_progress_map_for_user(
-    username: str, level: str, source: str = SOURCE_POOL
-) -> dict:
-    """username × level × source の単元別進捗を {unit_id: progress_dict} で返す。"""
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT unit_id, perfect_count, streak_count, best_streak, last_taken_at, graduated_at
-            FROM unit_progress
-            WHERE username = ? AND level = ? AND source = ?
-            """,
-            (username, level, source),
-        ).fetchall()
-        return {r["unit_id"]: dict(r) for r in rows}
-
-
 def update_unit_progress(
     username: str,
     level: str,

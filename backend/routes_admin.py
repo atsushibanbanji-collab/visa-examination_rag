@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend import auth, db, rag_perspectives
-from backend.config import ADMIN_TOKEN, UNIT_CLEAR_REQUIRED_STREAK
+from backend.config import ADMIN_TOKEN, CHALLENGE_STATUS_LABELS, UNIT_CLEAR_REQUIRED_STREAK
 from backend.db import SOURCE_RAG
 
 router = APIRouter()
@@ -157,15 +157,6 @@ def admin_reset_password(token: str, user_id: int, req: AdminPasswordResetReques
 # ----------------------------------------------------------------------
 # チャレンジ（異議申し立て）の裁定
 # ----------------------------------------------------------------------
-# 内部コード → 表示ラベル（管理画面用）
-_CHALLENGE_STATUS_LABEL = {
-    "open": "未処理",
-    "accepted": "未修正",
-    "closed": "クローズ",
-    "rejected": "却下",
-}
-
-
 class AdminChallengeResolveRequest(BaseModel):
     """認容／却下のリクエスト。受験者向けメッセージと内部の対応メモ（任意）。"""
     admin_message: Optional[str] = Field(None, max_length=2000)
@@ -204,7 +195,7 @@ def admin_challenges(token: str, status: Optional[str] = None):
                 "reason": c.get("reason"),
                 "snapshot": snap,
                 "status": c["status"],
-                "status_label": _CHALLENGE_STATUS_LABEL.get(c["status"], c["status"]),
+                "status_label": CHALLENGE_STATUS_LABELS.get(c["status"], c["status"]),
                 "admin_message": c.get("admin_message"),
                 "admin_note": c.get("admin_note"),
                 "created_at": c.get("created_at"),

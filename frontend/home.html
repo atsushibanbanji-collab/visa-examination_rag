@@ -44,22 +44,14 @@
     const userLabel = document.getElementById("user-label");
     const accountName = document.getElementById("account-name");
 
-    const LEVEL_NAMES = { beginner: "初級", intermediate: "中級", advanced: "上級" };
-    const LEVEL_ORDER = ["beginner", "intermediate", "advanced"];
+    // LEVELS / LEVEL_NAMES / requireLogin / logoutAndRedirect は common.js に共通化
 
     let levels = [];
 
     // 未ログインはログイン画面（トップ）へ。ログイン中なら難易度選択を表示する。
     async function init() {
-      let me;
-      try {
-        const res = await fetch("/api/auth/me");
-        if (res.status === 401) { location.href = "/"; return; }
-        me = await res.json();
-      } catch (e) {
-        location.href = "/";
-        return;
-      }
+      const me = await requireLogin();
+      if (!me) return;
       userLabel.textContent = `受験者：${me.display_name}`;
       accountName.textContent = `${me.display_name} さん`;
       document.getElementById("loading").style.display = "none";
@@ -67,10 +59,7 @@
       loadLevels();
     }
 
-    document.getElementById("logout-btn").addEventListener("click", async () => {
-      await fetch("/api/auth/logout", { method: "POST" });
-      location.href = "/";   // ログアウト後はログイン画面へ
-    });
+    document.getElementById("logout-btn").addEventListener("click", logoutAndRedirect);
 
     // 難易度カードを押したら単元選択画面へ。
     function goToUnits(levelId) {
@@ -87,7 +76,7 @@
         for (const cell of (data.cells || [])) {
           counts[cell.level] = (counts[cell.level] || 0) + 1;
         }
-        levels = LEVEL_ORDER.map((id) => ({
+        levels = LEVELS.map((id) => ({
           id,
           name: LEVEL_NAMES[id] || id,
           available: (counts[id] || 0) > 0,

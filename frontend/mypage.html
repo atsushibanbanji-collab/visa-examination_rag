@@ -63,13 +63,11 @@
 
   <script src="/assets/common.js"></script>
   <script>
-    const LEVELS = ["beginner", "intermediate", "advanced"];
+    // LEVELS / requireLogin / logoutAndRedirect は common.js に共通化
 
     async function init() {
-      // 未ログインならトップ（ログイン画面）へ
-      const meRes = await fetch("/api/auth/me");
-      if (meRes.status === 401) { location.href = "/"; return; }
-      const me = await meRes.json();
+      const me = await requireLogin();
+      if (!me) return;
       document.getElementById("profile-name").textContent = `${me.display_name} さん`;
       document.getElementById("profile-email").textContent = me.email;
       document.getElementById("loading").style.display = "none";
@@ -79,10 +77,7 @@
       loadChallenges();
     }
 
-    document.getElementById("logout-btn").addEventListener("click", async () => {
-      await fetch("/api/auth/logout", { method: "POST" });
-      location.href = "/";
-    });
+    document.getElementById("logout-btn").addEventListener("click", logoutAndRedirect);
 
     // --- 単元別進捗（レベルごとに取得して一覧表示） ---
     async function loadProgress() {
