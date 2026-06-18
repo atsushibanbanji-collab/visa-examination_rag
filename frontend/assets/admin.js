@@ -22,6 +22,11 @@
   const historyArea = document.getElementById("history-area");
   const challengesArea = document.getElementById("challenges-area");
   const challengeStatusFilter = document.getElementById("challenge-status-filter");
+  const challengesModal = document.getElementById("challenges-modal");
+  const challengesClose = document.getElementById("challenges-close");
+  const inboxBtn = document.getElementById("inbox-btn");
+  const inboxBadge = document.getElementById("inbox-badge");
+  let allChallenges = [];   // 取得した全チャレンジ（バッジ件数とフィルタ表示の元データ）
 
   // escapeHtml / fmtDate / levelLabel は common.js に共通化
 
@@ -163,16 +168,37 @@
   }
 
   // ===== 異議申し立て（チャレンジ） =====
+  // 全件を取得して保持し、バッジ（未処理件数）と一覧（状態フィルタ）を更新する。
   async function loadChallenges() {
-    const status = challengeStatusFilter ? challengeStatusFilter.value : "";
     challengesArea.innerHTML = '<div class="loading">読み込み中…</div>';
     try {
-      const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-      const data = await fetchJson(`/api/${ADMIN_TOKEN}/admin/challenges${qs}`);
-      renderChallenges(data.challenges || []);
+      const data = await fetchJson(`/api/${ADMIN_TOKEN}/admin/challenges`);
+      allChallenges = data.challenges || [];
+      updateInboxBadge();
+      renderFilteredChallenges();
     } catch (e) {
       challengesArea.innerHTML = `<div class="empty">取得に失敗しました: ${escapeHtml(e.message)}</div>`;
     }
+  }
+
+  // 未処理（open）件数を受信箱バッジに反映する。
+  function updateInboxBadge() {
+    const open = allChallenges.filter((c) => c.status === "open").length;
+    if (open > 0) {
+      inboxBadge.textContent = open;
+      inboxBadge.hidden = false;
+      inboxBtn.classList.add("has-unread");
+    } else {
+      inboxBadge.hidden = true;
+      inboxBtn.classList.remove("has-unread");
+    }
+  }
+
+  // 保持データを状態フィルタで絞り込んで描画する（再取得しない）。
+  function renderFilteredChallenges() {
+    const status = challengeStatusFilter ? challengeStatusFilter.value : "";
+    const items = status ? allChallenges.filter((c) => c.status === status) : allChallenges;
+    renderChallenges(items);
   }
 
   // スナップショット（設問・選択肢・正答・受験者の解答・解説）を整形する
@@ -208,21 +234,38 @@
     const cards = items.map((ch) => {
       const kind = CHALLENGE_KIND_LABEL[ch.kind] || "−";
       const statusLabel = ch.status_label || CHALLENGE_STATUS_LABEL[ch.status] || ch.status;
-      // 操作ボタン: 未処理→認容/却下、未修正→クローズ、終端→なし
-      let actions = "";
-      if (ch.status === "open") {
-        actions = `
-          <button type="button" class="btn ch-accept" data-id="${ch.id}">認容（正解扱いに訂正）</button>
-          <button type="button" class="btn btn-secondary ch-reject" data-id="${ch.id}">却下</button>`;
-      } else if (ch.status === "accepted") {
-        actions = `<button type="button" class="btn btn-secondary ch-close" data-id="${ch.id}">クローズ（是正完了）</button>`;
-      }
-      const adminMsg = ch.admin_message
-        ? `<div class="ch-meta">受験者へのメッセージ：${escapeHtml(ch.admin_message)}</div>` : "";
-      const adminNote = ch.admin_note
-        ? `<div class="ch-meta">対応メモ：${escapeHtml(ch.admin_note)}</div>` : "";
       const noAttempt = ch.attempt_id ? "" :
         '<div class="ch-meta" style="color:var(--danger);">※受験未確定（中断）。認容しても採点反映はありません。</div>';
+
+      // 入力欄＋操作（未処理＝返信・メモ＋認容/却下、処理済＝メモ＋クローズ、終端＝表示のみ）
+      const msgRO = ch.admin_message
+        ? `<div class="ch-meta">受験者への返信：${escapeHtml(ch.admin_message)}</div>` : "";
+      let panel = "";
+      if (ch.status === "open") {
+        panel = `
+          <label class="ch-field-label">受験者への返信（任意・本人のマイページに表示）</label>
+          <textarea class="ch-msg" data-id="${ch.id}" rows="2"></textarea>
+          <label class="ch-field-label">対応メモ（内部・任意）</label>
+          <textarea class="ch-note" data-id="${ch.id}" rows="2"></textarea>
+          <div class="ch-actions">
+            <button type="button" class="btn ch-accept" data-id="${ch.id}">認容（正解扱いに訂正）</button>
+            <button type="button" class="btn btn-secondary ch-reject" data-id="${ch.id}">却下</button>
+          </div>`;
+      } else if (ch.status === "accepted") {
+        panel = `
+          ${msgRO}
+          <label class="ch-field-label">対応メモ（内部・任意）</label>
+          <textarea class="ch-note" data-id="${ch.id}" rows="2">${escapeHtml(ch.admin_note || "")}</textarea>
+          <div class="ch-actions">
+            <button type="button" class="btn btn-secondary ch-close" data-id="${ch.id}">クローズ（是正完了）</button>
+          </div>`;
+      } else {
+        // closed / rejected：表示のみ
+        const noteRO = ch.admin_note
+          ? `<div class="ch-meta">対応メモ：${escapeHtml(ch.admin_note)}</div>` : "";
+        panel = `${msgRO}${noteRO}`;
+      }
+
       return `<div class="ch-card ch-card--${ch.status}">
         <div class="ch-head">
           <span class="ch-status ch-status--${ch.status}">${escapeHtml(statusLabel)}</span>
@@ -230,8 +273,8 @@
         </div>
         <div class="ch-reason"><strong>申し立て（${escapeHtml(kind)}）：</strong>${escapeHtml(ch.reason || "")}</div>
         ${renderSnapshot(ch.snapshot)}
-        ${noAttempt}${adminMsg}${adminNote}
-        <div class="ch-actions">${actions}</div>
+        ${noAttempt}
+        ${panel}
       </div>`;
     }).join("");
     challengesArea.innerHTML = cards;
@@ -244,41 +287,41 @@
       b.addEventListener("click", () => closeChallenge(b.dataset.id)));
   }
 
+  // カード内の入力欄の値を取得（空は null）。
+  function cardValue(id, cls) {
+    const el = challengesArea.querySelector(`.${cls}[data-id="${id}"]`);
+    if (!el) return null;
+    const v = el.value.trim();
+    return v || null;
+  }
+
+  // 認容／却下。確認ダイアログは出さず、入力欄の返信・メモを添えて即時処理する。
   async function resolveChallenge(id, action) {
-    const verb = action === "accept" ? "認容" : "却下";
-    if (!confirm(`このチャレンジを${verb}します。よろしいですか？` +
-        (action === "accept" ? "\n（当該設問が正解扱いに訂正され、満点化すれば通算満点に加算されます）" : ""))) return;
-    const adminMessage = prompt("受験者へのメッセージ（任意・本人に表示されます）", "") || null;
-    const adminNote = prompt("対応メモ（任意・内部用）", "") || null;
+    const body = {
+      admin_message: cardValue(id, "ch-msg"),
+      admin_note: cardValue(id, "ch-note"),
+    };
     try {
       const res = await fetch(`/api/${ADMIN_TOKEN}/admin/challenges/${id}/${action}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ admin_message: adminMessage, admin_note: adminNote }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "処理に失敗しました");
-      if (action === "accept" && data.scoring && data.scoring.became_perfect) {
-        alert("認容しました。採点を訂正し、満点として通算満点に加算しました。");
-      } else {
-        alert(`${verb}しました。`);
-      }
-      loadChallenges();
+      loadChallenges();   // 一覧・バッジが更新されることが処理完了の合図
     } catch (e) {
       alert("失敗: " + e.message);
     }
   }
 
   async function closeChallenge(id) {
-    if (!confirm("このチャレンジをクローズします。\n観点・プロンプトの是正をGitに反映済み、または是正不要と判断した場合に実施してください。")) return;
-    const adminNote = prompt("対応メモ（是正内容、または「是正不要：理由」など）", "") || null;
     try {
       const res = await fetch(`/api/${ADMIN_TOKEN}/admin/challenges/${id}/close`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ admin_note: adminNote }),
+        body: JSON.stringify({ admin_note: cardValue(id, "ch-note") }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "処理に失敗しました");
-      alert("クローズしました。");
       loadChallenges();
     } catch (e) {
       alert("失敗: " + e.message);
@@ -286,7 +329,23 @@
   }
 
   if (challengeStatusFilter) {
-    challengeStatusFilter.addEventListener("change", loadChallenges);
+    challengeStatusFilter.addEventListener("change", renderFilteredChallenges);
+  }
+
+  // 受信箱ボタン: 一覧モーダルを開く（開くたびに最新化）。
+  function openChallenges() {
+    challengesModal.hidden = false;
+    loadChallenges();
+  }
+  function closeChallenges() {
+    challengesModal.hidden = true;
+  }
+  if (inboxBtn) inboxBtn.addEventListener("click", openChallenges);
+  if (challengesClose) challengesClose.addEventListener("click", closeChallenges);
+  if (challengesModal) {
+    challengesModal.addEventListener("click", (e) => {
+      if (e.target === challengesModal) closeChallenges();  // 背景クリックで閉じる
+    });
   }
 
   load();

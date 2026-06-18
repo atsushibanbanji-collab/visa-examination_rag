@@ -74,7 +74,7 @@ function pillClass(pct) {
 // チャレンジ（異議申し立て）ステータス内部コード → 表示ラベル
 const CHALLENGE_STATUS_LABEL = {
   open: "未処理",
-  accepted: "未修正",
+  accepted: "処理済",
   closed: "クローズ",
   rejected: "却下",
 };
