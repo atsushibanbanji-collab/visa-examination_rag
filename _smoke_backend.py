@@ -257,14 +257,14 @@ chk(c.post(f"/api/{T}/admin/challenges/{cid}/accept", json={}).status_code == 40
 # マイページに管理者メッセージ付きで反映
 mine2 = c.get("/api/my/challenges").json()["challenges"]
 mc = next((x for x in mine2 if x["id"] == cid), None)
-chk(mc and mc["status"] == "accepted" and mc["status_label"] == "未修正"
+chk(mc and mc["status"] == "accepted" and mc["status_label"] == "処理済"
     and mc["admin_message"] == "ご指摘どおり訂正しました",
     "[challenge] マイページに認容と管理者メッセージが反映")
 
-# 認容（未修正）→ クローズ（手動・根本是正の完了印）
+# 認容（処理済）→ クローズ（手動・根本是正の完了印）
 clo = c.post(f"/api/{T}/admin/challenges/{cid}/close",
              json={"admin_note": "観点summaryを修正済み"})
-chk(clo.status_code == 200, "[challenge] 未修正→クローズできる")
+chk(clo.status_code == 200, "[challenge] 処理済→クローズできる")
 chk(c.post(f"/api/{T}/admin/challenges/{cid}/close", json={}).status_code == 409,
     "[challenge] クローズ済みの再クローズは409")
 

@@ -236,7 +236,7 @@ def admin_reject_challenge(token: str, challenge_id: int, req: AdminChallengeRes
 
 @router.post("/api/{token}/admin/challenges/{challenge_id}/close")
 def admin_close_challenge(token: str, challenge_id: int, req: AdminChallengeCloseRequest):
-    """認容済み（未修正）のチャレンジを手動でクローズする（根本是正の完了印・終端）。
+    """認容済み（処理済）のチャレンジを手動でクローズする（根本是正の完了印・終端）。
 
     観点メタ／システムプロンプトの是正自体はサイト外（Git push）で行い、反映後に
     管理者がここでクローズする。対応メモに是正内容（または是正不要の理由）を残す。
@@ -246,5 +246,5 @@ def admin_close_challenge(token: str, challenge_id: int, req: AdminChallengeClos
     if not res["ok"]:
         if res.get("error") == "not_found":
             raise HTTPException(404, "チャレンジが見つかりません。")
-        raise HTTPException(409, "認容済み（未修正）のチャレンジのみクローズできます。")
+        raise HTTPException(409, "認容済み（処理済）のチャレンジのみクローズできます。")
     return {"ok": True}

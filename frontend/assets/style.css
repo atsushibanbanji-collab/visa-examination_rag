@@ -1122,3 +1122,56 @@ code {
 .ch-meta { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .ch-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
 .ch-actions .btn { font-size: .82rem; padding: 6px 14px; }
+.ch-field-label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 2px; }
+.ch-card textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+/* 管理画面: 異議申し立て受信箱（ヘッダ右上のバッジ付きボタン） */
+.inbox-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.inbox-btn:hover { background: #f0f1f4; }
+.inbox-btn.has-unread { border-color: var(--accent); }
+.inbox-badge {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* 異議申し立てモーダル（管理画面・一覧用に広め） */
+.modal-card--wide { max-width: 760px; }
+.ch-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}

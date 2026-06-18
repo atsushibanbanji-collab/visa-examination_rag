@@ -1089,7 +1089,7 @@ def reject_challenge(
 
 
 def close_challenge(challenge_id: int, admin_note: Optional[str] = None) -> dict:
-    """accepted（未修正）のチャレンジを手動でクローズ（終端）にする。根本是正の完了印。"""
+    """accepted（処理済）のチャレンジを手動でクローズ（終端）にする。根本是正の完了印。"""
     now = _now_iso()
     with get_conn() as conn:
         ch = conn.execute(

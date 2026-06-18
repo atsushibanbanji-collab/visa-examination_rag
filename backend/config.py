@@ -73,7 +73,7 @@ SOURCE_PAGES_PER_SHEET = int(os.environ.get("SOURCE_PAGES_PER_SHEET", "2"))
 # routes_quiz / routes_admin が参照する単一の真実源（frontend/common.js にも同義の表あり）。
 CHALLENGE_STATUS_LABELS = {
     "open": "未処理",
-    "accepted": "未修正",
+    "accepted": "処理済",
     "closed": "クローズ",
     "rejected": "却下",
 }
