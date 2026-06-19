@@ -211,6 +211,7 @@ def _init_db_postgres() -> None:
                 snapshot        TEXT    NOT NULL,
                 status          TEXT    NOT NULL DEFAULT 'open',
                 scoring_applied INTEGER NOT NULL DEFAULT 0,
+                resolution      TEXT,
                 admin_message   TEXT,
                 admin_note      TEXT,
                 created_at      TEXT    NOT NULL,
@@ -223,6 +224,8 @@ def _init_db_postgres() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges(status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_user_id ON challenges(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_attempt_id ON challenges(attempt_id)")
+        # 容認の種別（correct=正解に訂正 / void=ノーカウント）。既存DBにも安全に足す。
+        cur.execute("ALTER TABLE challenges ADD COLUMN IF NOT EXISTS resolution TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -363,6 +366,7 @@ def _init_db_sqlite() -> None:
                 snapshot        TEXT    NOT NULL,
                 status          TEXT    NOT NULL DEFAULT 'open',
                 scoring_applied INTEGER NOT NULL DEFAULT 0,
+                resolution      TEXT,
                 admin_message   TEXT,
                 admin_note      TEXT,
                 created_at      TEXT    NOT NULL,
@@ -375,6 +379,10 @@ def _init_db_sqlite() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges(status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_user_id ON challenges(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_attempt_id ON challenges(attempt_id)")
+        # 容認の種別（correct=正解に訂正 / void=ノーカウント）。既存DBにも安全に足す。
+        ch_cols = {r[1] for r in cur.execute("PRAGMA table_info(challenges)").fetchall()}
+        if "resolution" not in ch_cols:
+            cur.execute("ALTER TABLE challenges ADD COLUMN resolution TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -1024,20 +1032,25 @@ def _adjust_perfect_count_conn(conn, username, level, unit_id, source, user_id, 
 
 def accept_challenge(
     challenge_id: int,
+    resolution: str = "correct",
     admin_message: Optional[str] = None,
     admin_note: Optional[str] = None,
 ) -> dict:
     """open のチャレンジを認容し、採点を遡及訂正する（単一トランザクション・冪等）。
 
-    容認＝申し立て対象の設問の正誤判定を反転する（双方向）。
-      - 誤答だった → 正解に訂正（score +1、満点化で通算満点 +1）
-      - 正解だった → 誤答に訂正（score -1、満点が崩れれば通算満点 -1・クリアは再評価）
+    resolution は容認の種別（起票時の正誤に依らず一律同じ挙動）:
+      - "correct"（正解に訂正）：当該設問を正解にセットする（誤答→正解で score +1、
+        既に正解ならそのまま）。
+      - "void"（ノーカウント）：当該設問を集計から除外する（total -1、正解だった分は
+        score も -1）。例: 9/10 で1問を無効化 → 9/9。
+    いずれも満点状態が跨いだ時だけ通算満点を増減し、クリアは再評価（取り消しあり）。
     attempt が無い（中断起票）場合は採点反映なしでステータスのみ accepted にする。
 
     戻り値: {"ok": bool, "error"?: str,
-             "scoring": {applied, old_score, new_score, verdict, perfect_delta}}
-      verdict は訂正後の判定（"correct"/"wrong"）。
+             "scoring": {applied, old_score, old_total, new_score, new_total, perfect_delta}}
     """
+    if resolution not in ("correct", "void"):
+        return {"ok": False, "error": "bad_resolution"}
     now = _now_iso()
     with get_conn() as conn:
         ch = conn.execute(
@@ -1048,8 +1061,8 @@ def accept_challenge(
         if ch["status"] != "open":
             return {"ok": False, "error": "not_open"}
 
-        scoring = {"applied": False, "old_score": None, "new_score": None,
-                   "verdict": None, "perfect_delta": 0}
+        scoring = {"applied": False, "old_score": None, "old_total": None,
+                   "new_score": None, "new_total": None, "perfect_delta": 0}
         attempt_id = ch["attempt_id"]
         if attempt_id is not None and not ch["scoring_applied"]:
             att = conn.execute(
@@ -1069,18 +1082,22 @@ def accept_challenge(
                     (a for a in answers if a.get("id") == ch["question_id"]), None
                 )
                 if target is not None:
-                    # 容認＝判定を反転（誤答↔正解の双方向）
-                    new_verdict = not bool(target.get("is_correct", False))
-                    target["is_correct"] = new_verdict
-                    new_score = sum(1 for a in answers if a.get("is_correct"))
-                    was_perfect = att["score"] == att["total"]
-                    now_perfect = new_score == att["total"]
-                    if new_score != att["score"]:
-                        conn.execute(
-                            "UPDATE attempts SET score = ?, details = ? WHERE id = ?",
-                            (new_score, json.dumps(details, ensure_ascii=False), att["id"]),
-                        )
-                    # 満点状態が跨いだ時だけ通算満点を増減（クリアは _adjust 内で再評価）
+                    if resolution == "void":
+                        target["voided"] = True            # 集計から除外
+                    else:  # correct
+                        target["is_correct"] = True         # 正解にセット
+                        target["voided"] = False
+                    # voided を除いて score / total を再計算する
+                    new_total = sum(1 for a in answers if not a.get("voided"))
+                    new_score = sum(
+                        1 for a in answers if a.get("is_correct") and not a.get("voided")
+                    )
+                    was_perfect = att["total"] > 0 and att["score"] == att["total"]
+                    now_perfect = new_total > 0 and new_score == new_total
+                    conn.execute(
+                        "UPDATE attempts SET score = ?, total = ?, details = ? WHERE id = ?",
+                        (new_score, new_total, json.dumps(details, ensure_ascii=False), att["id"]),
+                    )
                     delta = 0
                     if now_perfect and not was_perfect:
                         delta = 1
@@ -1092,15 +1109,14 @@ def accept_challenge(
                             ch["source"], att["user_id"], now, delta,
                         )
                     scoring.update(
-                        applied=True, old_score=att["score"], new_score=new_score,
-                        verdict=("correct" if new_verdict else "wrong"),
-                        perfect_delta=delta,
+                        applied=True, old_score=att["score"], old_total=att["total"],
+                        new_score=new_score, new_total=new_total, perfect_delta=delta,
                     )
 
         conn.execute(
             "UPDATE challenges SET status = 'accepted', scoring_applied = 1, "
-            "admin_message = ?, admin_note = ?, resolved_at = ? WHERE id = ?",
-            (admin_message, admin_note, now, challenge_id),
+            "resolution = ?, admin_message = ?, admin_note = ?, resolved_at = ? WHERE id = ?",
+            (resolution, admin_message, admin_note, now, challenge_id),
         )
         return {"ok": True, "scoring": scoring}
 

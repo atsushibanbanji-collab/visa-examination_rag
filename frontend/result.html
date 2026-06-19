@@ -10,7 +10,7 @@
 <body>
   <div class="app-shell">
     <header class="header">
-      <h1>ビザ検定</h1>
+      <h1 id="app-title">ビザ検定</h1>
       <p class="subtitle" id="user-label"></p>
     </header>
 
@@ -89,7 +89,9 @@
       challengedIds = new Set(result.challenged_ids || []);
       const name = result.username || "";
       const lvl = result.level || level;
-      userLabel.textContent = `受験者：${name}（${levelLabel(lvl)}）`;
+      userLabel.textContent = `受験者：${name}`;
+      const appTitle = document.getElementById("app-title");
+      if (appTitle) appTitle.textContent = `ビザ検定（${levelLabel(lvl)}）`;
 
       scoreEl.textContent = result.score;
       totalEl.textContent = result.total;

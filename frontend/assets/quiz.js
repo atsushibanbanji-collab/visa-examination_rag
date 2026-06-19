@@ -43,13 +43,15 @@
   }
 
   const levelName = levelLabel(level);  // common.js
-  userLabel.textContent = `（${levelName}）`;
+  // レベルはタイトルに表示する（受験者ラベルには出さない）
+  const appTitle = document.getElementById("app-title");
+  if (appTitle) appTitle.textContent = `ビザ検定（${levelName}）`;
   // 表示名はログイン情報から取得して反映する
   fetch("/api/auth/me").then((r) => {
     if (r.status === 401) { location.href = "/"; return null; }
     return r.json();
   }).then((me) => {
-    if (me) userLabel.textContent = `受験者：${me.display_name}（${levelName}）`;
+    if (me) userLabel.textContent = `受験者：${me.display_name}`;
   }).catch(() => {});
 
   const unitsParams = new URLSearchParams({ level });
@@ -228,7 +230,9 @@
 
   // 選択式（初級Yes/No・中級）の選択肢を描画する
   function renderChoices(q, result, isChecked) {
-    choicesEl.className = "choices" + (isChecked ? " locked" : "");
+    // 2択（はい/いいえ）は横並びにして縦の場所を節約する
+    const inline = (q.choices || []).length === 2 ? " choices--inline" : "";
+    choicesEl.className = "choices" + inline + (isChecked ? " locked" : "");
     q.choices.forEach((c, i) => {
       const div = document.createElement("div");
       let cls = "choice";
@@ -355,8 +359,6 @@
   function openChallengeModal() {
     challengeReason.value = "";
     challengeError.hidden = true;
-    const grading = challengeModal.querySelector('input[name="challenge-kind"][value="grading"]');
-    if (grading) grading.checked = true;
     challengeModal.hidden = false;
   }
   function closeChallengeModal() {
@@ -373,10 +375,8 @@
       challengeError.hidden = false;
       return;
     }
-    const kindEl = challengeModal.querySelector('input[name="challenge-kind"]:checked');
-    const kind = kindEl ? kindEl.value : "grading";
     const ans = answers[currentIdx];
-    const body = { session_id: sessionId, question_id: q.id, reason, kind };
+    const body = { session_id: sessionId, question_id: q.id, reason };
     if (q.type === "fill_in") {
       body.text_answers = Array.isArray(ans) ? ans : [];
     } else {
@@ -397,7 +397,7 @@
         challenged.add(q.id);
         closeChallengeModal();
         updateChallengeUi(q);
-        alert("この問題には既に異議を申し立てています。");
+        alert("この回答には既にチャレンジしています。");
         return;
       }
       if (!res.ok) throw new Error(data.detail || "送信に失敗しました");

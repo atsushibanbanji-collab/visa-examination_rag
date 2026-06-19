@@ -1082,9 +1082,19 @@ code {
   font: inherit;
   resize: vertical;
 }
-.challenge-kind { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-.challenge-kind label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: 14px; }
-.challenge-kind input { width: auto; }
+/* 受験画面: 縦の余白を詰めてスクロールを減らす */
+.app-shell--quiz .header { margin-bottom: 16px; padding-bottom: 10px; }
+.app-shell--quiz .card { padding: 18px; }
+.app-shell--quiz .question-text { margin-bottom: 12px; }
+.app-shell--quiz .quiz-header { margin-bottom: 8px; }
+.app-shell--quiz .progress-meta { margin-bottom: 4px; }
+.app-shell--quiz .choices { gap: 8px; }
+/* はい/いいえ（2択）は横並び */
+.choices--inline { flex-direction: row; }
+.choices--inline .choice { flex: 1; justify-content: center; }
+
+/* ナビバー（ログイン後の画面選択ボタン） */
+.nav-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 
 /* ステータスバッジ（マイページ・管理画面共通） */
 .ch-status {

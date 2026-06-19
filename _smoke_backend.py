@@ -243,13 +243,13 @@ chk(all(x["status"] == "open" for x in
         c.get(f"/api/{T}/admin/challenges?status=open").json()["challenges"]),
     "[challenge] 管理一覧: statusフィルタ")
 
-# 認容 → 採点遡及訂正（9→10）・通算満点 +1
+# 認容（正解に訂正）→ 誤答を正解へ（9→10）・通算満点 +1
 acc = c.post(f"/api/{T}/admin/challenges/{cid}/accept",
-             json={"admin_message": "ご指摘どおり訂正しました"})
+             json={"resolution": "correct", "admin_message": "ご指摘どおり訂正しました"})
 chk(acc.status_code == 200 and acc.json()["scoring"]["new_score"] == 10
-    and acc.json()["scoring"]["verdict"] == "correct"
+    and acc.json()["scoring"]["new_total"] == 10
     and acc.json()["scoring"]["perfect_delta"] == 1,
-    "[challenge] 認容で誤答→正解（9→10・通算満点+1）")
+    "[challenge] 正解に訂正で誤答→正解（9→10・通算満点+1）")
 chk(_db.get_attempt_by_id(ev_attempt_id)["score"] == 10, "[challenge] 受験記録が10点に訂正")
 ev_prog = _db.get_progress_map_by_user_id(me["id"], "beginner", source=_db.SOURCE_RAG)
 chk(ev_prog.get("e_visa", {}).get("perfect_count") == 1, "[challenge] 認容で通算満点が1に")
@@ -272,15 +272,16 @@ chk(mc_closed and mc_closed["status_label"] == "容認", "[challenge] クロー�
 chk(c.post(f"/api/{T}/admin/challenges/{cid}/close", json={}).status_code == 409,
     "[challenge] クローズ済みの再クローズは409")
 
-# 容認の双方向: 元々正解の設問を容認 → 誤答に訂正（スコア減・通算満点 -1）
-acc2 = c.post(f"/api/{T}/admin/challenges/{cid2}/accept", json={})
-chk(acc2.status_code == 200 and acc2.json()["scoring"]["verdict"] == "wrong"
+# ノーカウント（void）: 設問を集計から除外。total が1減る（10/10 → 9/9）
+acc2 = c.post(f"/api/{T}/admin/challenges/{cid2}/accept", json={"resolution": "void"})
+chk(acc2.status_code == 200 and acc2.json()["scoring"]["new_total"] == 9
     and acc2.json()["scoring"]["new_score"] == 9
-    and acc2.json()["scoring"]["perfect_delta"] == -1,
-    "[challenge] 容認で正解→誤答に訂正（10→9・通算満点-1）")
-chk(_db.get_attempt_by_id(ev_attempt_id)["score"] == 9, "[challenge] 受験記録が9点に戻る")
+    and acc2.json()["scoring"]["perfect_delta"] == 0,
+    "[challenge] ノーカウントで設問除外（10/10→9/9・満点維持）")
+_att2 = _db.get_attempt_by_id(ev_attempt_id)
+chk(_att2["score"] == 9 and _att2["total"] == 9, "[challenge] 受験記録が9/9に（total減）")
 chk(_db.get_progress_map_by_user_id(me["id"], "beginner", source=_db.SOURCE_RAG)
-    .get("e_visa", {}).get("perfect_count") == 0, "[challenge] 通算満点が0に戻る")
+    .get("e_visa", {}).get("perfect_count") == 1, "[challenge] 9/9満点維持で通算満点は1のまま")
 
 # 却下 → 終端。クローズはできない（accepted のみ）。
 rej = c.post(f"/api/{T}/admin/challenges/{cid3}/reject",
