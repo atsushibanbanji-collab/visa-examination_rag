@@ -403,8 +403,7 @@
       if (!res.ok) throw new Error(data.detail || "送信に失敗しました");
       challenged.add(q.id);
       closeChallengeModal();
-      updateChallengeUi(q);
-      alert("異議を申し立てました。管理者が確認します。");
+      updateChallengeUi(q);   // 「✓ チャレンジ済み」表示で完了がわかる（ポップアップは出さない）
     } catch (e) {
       challengeError.textContent = e.message || "送信に失敗しました";
       challengeError.hidden = false;
@@ -479,6 +478,7 @@
       }
       const result = await res.json();
       if (genMetrics) result.gen_metrics = genMetrics;
+      result.challenged_ids = Array.from(challenged);  // 暫定スコア表示用（チャレンジした設問）
       sessionStorage.setItem("visa_quiz_last_result", JSON.stringify(result));
       const p = new URLSearchParams({ level });
       location.href = `/result.html?${p.toString()}`;

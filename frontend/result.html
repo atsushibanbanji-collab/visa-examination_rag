@@ -23,6 +23,11 @@
         <div class="pct" id="pct">0%</div>
       </div>
 
+      <!-- 暫定スコア注記（チャレンジ中の問題がある場合のみ表示） -->
+      <div class="provisional-note" id="provisional-note" style="display:none;">
+        <strong>暫定スコアです。</strong>チャレンジ中の問題があり、確定スコアは管理者の確認後に決まります。
+      </div>
+
       <!-- 連続記録の更新表示 -->
       <section class="card" id="streak-banner" style="display:none;">
         <h2>連続記録の更新</h2>
@@ -70,6 +75,7 @@
     const historyArea = document.getElementById("history-area");
     const retryLink = document.getElementById("retry-link");
     const unitsLink = document.getElementById("units-link");
+    let challengedIds = new Set();   // この受験でチャレンジした設問ID（暫定スコア表示用）
 
     // escapeHtml / levelLabel / fmtDate / pillClass は common.js に共通化
 
@@ -80,6 +86,7 @@
         return;
       }
       const result = JSON.parse(raw);
+      challengedIds = new Set(result.challenged_ids || []);
       const name = result.username || "";
       const lvl = result.level || level;
       userLabel.textContent = `受験者：${name}（${levelLabel(lvl)}）`;
@@ -104,6 +111,14 @@
       }
 
       renderReview(result.results);
+
+      // 暫定スコア表示（チャレンジ中の問題がある場合）
+      if (challengedIds.size > 0) {
+        document.getElementById("provisional-note").style.display = "block";
+        bannerLabel.textContent = "暫定スコア";
+        scoreBanner.classList.add("provisional");
+      }
+
       loadingEl.style.display = "none";
       contentEl.style.display = "block";
 
@@ -186,8 +201,9 @@
     function renderReview(results) {
       reviewEl.innerHTML = "";
       (results || []).forEach((r, idx) => {
+        const challenged = challengedIds.has(r.id);
         const item = document.createElement("div");
-        item.className = "review-item " + (r.is_correct ? "correct" : "wrong");
+        item.className = "review-item " + (r.is_correct ? "correct" : "wrong") + (challenged ? " challenged" : "");
 
         let body = "";
         if (r.type === "fill_in") {
@@ -215,7 +231,7 @@
         }
 
         item.innerHTML = `
-          <span class="badge">${r.is_correct ? "正答" : "誤答"}</span>
+          <span class="badge">${r.is_correct ? "正答" : "誤答"}</span>${challenged ? '<span class="badge badge-challenge">チャレンジ中</span>' : ""}
           <p class="q">問${idx + 1}. ${escapeHtml(r.question)}</p>
           ${body}
           ${r.explanation ? `<div class="explanation">${escapeHtml(r.explanation)}</div>` : ""}
