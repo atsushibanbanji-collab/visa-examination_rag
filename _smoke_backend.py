@@ -230,8 +230,8 @@ ev_attempt_id = ev_rs["attempt_id"]
 
 # 受験者本人のチャレンジ一覧（マイページ）に未処理で出る
 mine = c.get("/api/my/challenges").json()["challenges"]
-chk(any(x["id"] == cid and x["status"] == "open" and x["status_label"] == "未処理" for x in mine),
-    "[challenge] マイページに未処理で表示")
+chk(any(x["id"] == cid and x["status"] == "open" and x["status_label"] == "確認中" for x in mine),
+    "[challenge] マイページに確認中で表示")
 
 # 管理一覧（スナップショット込み）
 adm = c.get(f"/api/{T}/admin/challenges").json()["challenges"]
@@ -243,36 +243,45 @@ chk(all(x["status"] == "open" for x in
         c.get(f"/api/{T}/admin/challenges?status=open").json()["challenges"]),
     "[challenge] 管理一覧: statusフィルタ")
 
-# 認容 → 採点遡及訂正（9→10）・通算満点 +1
+# 認容（正解に訂正）→ 誤答を正解へ（9→10）・通算満点 +1
 acc = c.post(f"/api/{T}/admin/challenges/{cid}/accept",
-             json={"admin_message": "ご指摘どおり訂正しました"})
-chk(acc.status_code == 200 and acc.json()["scoring"]["became_perfect"] is True
-    and acc.json()["scoring"]["new_score"] == 10, "[challenge] 認容で9→10満点化")
+             json={"resolution": "correct", "admin_message": "ご指摘どおり訂正しました"})
+chk(acc.status_code == 200 and acc.json()["scoring"]["new_score"] == 10
+    and acc.json()["scoring"]["new_total"] == 10
+    and acc.json()["scoring"]["perfect_delta"] == 1,
+    "[challenge] 正解に訂正で誤答→正解（9→10・通算満点+1）")
 chk(_db.get_attempt_by_id(ev_attempt_id)["score"] == 10, "[challenge] 受験記録が10点に訂正")
 ev_prog = _db.get_progress_map_by_user_id(me["id"], "beginner", source=_db.SOURCE_RAG)
 chk(ev_prog.get("e_visa", {}).get("perfect_count") == 1, "[challenge] 認容で通算満点が1に")
 # 再認容は 409（冪等・二重加算しない）
 chk(c.post(f"/api/{T}/admin/challenges/{cid}/accept", json={}).status_code == 409,
     "[challenge] 認容済みの再認容は409")
-# マイページに管理者メッセージ付きで反映
+# マイページの状態は利用者向けラベル「容認」（処理済/クローズは出さない）
 mine2 = c.get("/api/my/challenges").json()["challenges"]
 mc = next((x for x in mine2 if x["id"] == cid), None)
-chk(mc and mc["status"] == "accepted" and mc["status_label"] == "処理済"
+chk(mc and mc["status"] == "accepted" and mc["status_label"] == "容認"
     and mc["admin_message"] == "ご指摘どおり訂正しました",
-    "[challenge] マイページに認容と管理者メッセージが反映")
+    "[challenge] マイページに容認と管理者メッセージが反映")
 
-# 認容（処理済）→ クローズ（手動・根本是正の完了印）
+# 認容（処理済）→ クローズ（手動・根本是正の完了印）。利用者表示は引き続き「容認」。
 clo = c.post(f"/api/{T}/admin/challenges/{cid}/close",
              json={"admin_note": "観点summaryを修正済み"})
 chk(clo.status_code == 200, "[challenge] 処理済→クローズできる")
+mc_closed = next((x for x in c.get("/api/my/challenges").json()["challenges"] if x["id"] == cid), None)
+chk(mc_closed and mc_closed["status_label"] == "容認", "[challenge] クローズも利用者には『容認』表示")
 chk(c.post(f"/api/{T}/admin/challenges/{cid}/close", json={}).status_code == 409,
     "[challenge] クローズ済みの再クローズは409")
 
-# 内容異議（元々正解）を認容 → 採点は変わらない（became_perfect=False）
-acc2 = c.post(f"/api/{T}/admin/challenges/{cid2}/accept", json={})
-chk(acc2.status_code == 200 and acc2.json()["scoring"]["became_perfect"] is False
-    and acc2.json()["scoring"]["new_score"] is None,
-    "[challenge] 元々正解への内容異議は採点不変で認容")
+# ノーカウント（void）: 設問を集計から除外。total が1減る（10/10 → 9/9）
+acc2 = c.post(f"/api/{T}/admin/challenges/{cid2}/accept", json={"resolution": "void"})
+chk(acc2.status_code == 200 and acc2.json()["scoring"]["new_total"] == 9
+    and acc2.json()["scoring"]["new_score"] == 9
+    and acc2.json()["scoring"]["perfect_delta"] == 0,
+    "[challenge] ノーカウントで設問除外（10/10→9/9・満点維持）")
+_att2 = _db.get_attempt_by_id(ev_attempt_id)
+chk(_att2["score"] == 9 and _att2["total"] == 9, "[challenge] 受験記録が9/9に（total減）")
+chk(_db.get_progress_map_by_user_id(me["id"], "beginner", source=_db.SOURCE_RAG)
+    .get("e_visa", {}).get("perfect_count") == 1, "[challenge] 9/9満点維持で通算満点は1のまま")
 
 # 却下 → 終端。クローズはできない（accepted のみ）。
 rej = c.post(f"/api/{T}/admin/challenges/{cid3}/reject",
@@ -432,6 +441,27 @@ chk(pr.status_code == 200
     "[admin] パスワード再設定: 新パスワードでログイン可")
 # トークン不一致は404
 chk(c.get("/api/wrongtoken/admin/users").status_code == 404, "[admin] 不正トークンは404")
+
+# ============ メールアドレス変更 ============
+ec = TestClient(app)
+ec.post("/api/auth/register",
+        json={"email": "chg@example.com", "password": "pass1234", "display_name": "変更太郎"})
+chk(ec.post("/api/auth/email",
+            json={"new_email": "chg2@example.com", "current_password": "WRONG"}).status_code == 401,
+    "[email] 現在のPW誤りは401")
+chk(ec.post("/api/auth/email",
+            json={"new_email": "raguser@example.com", "current_password": "pass1234"}).status_code == 409,
+    "[email] 既存メールへの変更は409")
+r_ec = ec.post("/api/auth/email",
+               json={"new_email": "chg2@example.com", "current_password": "pass1234"})
+chk(r_ec.status_code == 200 and ec.get("/api/auth/me").json()["email"] == "chg2@example.com",
+    "[email] 変更成功・セッション維持で新メール反映")
+chk(ec.post("/api/auth/login",
+            json={"email": "chg2@example.com", "password": "pass1234"}).status_code == 200,
+    "[email] 新メールでログイン可")
+chk(ec.post("/api/auth/login",
+            json={"email": "chg@example.com", "password": "pass1234"}).status_code == 401,
+    "[email] 旧メールではログイン不可")
 
 print("\n" + ("=== 全通過 ===" if not ng else f"=== 失敗 {ng} ==="))
 sys.exit(1 if ng else 0)

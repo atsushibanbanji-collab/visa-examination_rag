@@ -79,6 +79,30 @@ def me(user: dict = Depends(auth.get_current_user)):
     return {"id": user["id"], "email": user["email"], "display_name": user["display_name"]}
 
 
+class EmailChangeRequest(BaseModel):
+    new_email: str = Field(..., min_length=3, max_length=254)
+    current_password: str = Field(..., min_length=1, max_length=128)
+
+
+@router.post("/api/auth/email")
+def change_email(req: EmailChangeRequest, user: dict = Depends(auth.get_current_user)):
+    """メールアドレスを変更する（現在のパスワード必須）。
+
+    進捗・履歴は username（＝メール）でも一意管理しているため、変更時に該当行も
+    付け替える（db.change_user_email 内）。セッションは user_id 基準のため維持される。
+    """
+    new_email = _validate_email(req.new_email)
+    full = db.get_user_by_email(user["email"])
+    if full is None or not auth.verify_password(req.current_password, full["password_hash"]):
+        raise HTTPException(401, "現在のパスワードが正しくありません。")
+    res = db.change_user_email(user["id"], new_email)
+    if not res["ok"]:
+        if res.get("error") == "duplicate":
+            raise HTTPException(409, "このメールアドレスは既に使われています。")
+        raise HTTPException(404, "アカウントが見つかりません。")
+    return {"ok": True, "email": new_email}
+
+
 @router.post("/api/auth/password")
 def change_password(req: PasswordChangeRequest, user: dict = Depends(auth.get_current_user)):
     full = db.get_user_by_email(user["email"])
