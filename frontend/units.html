@@ -10,27 +10,28 @@
 <body>
   <div class="app-shell">
     <header class="header">
-      <h1 id="app-title">ビザ検定</h1>
+      <h1>ビザ検定</h1>
       <p class="subtitle" id="user-label"></p>
     </header>
 
     <div id="loading" class="loading">読み込み中…</div>
 
     <main id="content" style="display:none;">
-      <nav class="nav-bar">
-        <a class="btn btn-secondary" href="/home.html">難易度選択</a>
-        <a class="btn btn-secondary" href="/mypage.html">マイページ</a>
-        <button type="button" class="btn btn-secondary" id="nav-logout">ログアウト</button>
-      </nav>
+      <section class="card" id="progress-summary-card">
+        <div class="progress-summary" id="progress-summary"></div>
+      </section>
 
       <section class="card">
-        <h2>単元選択</h2>
+        <h2>単元を選ぶ</h2>
         <p class="muted">
           10問満点を <strong>通算3回</strong> でクリア。
         </p>
-        <div class="progress-summary" id="progress-summary"></div>
         <div class="unit-grid" id="unit-grid"></div>
       </section>
+
+      <div class="btn-row">
+        <a class="btn btn-secondary" id="back-link" href="/home.html">← 難易度選択に戻る</a>
+      </div>
     </main>
 
     <div id="error-area" class="card" style="display:none;">
@@ -61,11 +62,7 @@
       errorMsg.textContent = msg;
     }
 
-    // escapeHtml / levelLabel / logoutAndRedirect は common.js に共通化
-
-    const appTitle = document.getElementById("app-title");
-    if (appTitle) appTitle.textContent = `ビザ検定（${levelLabel(level)}）`;
-    document.getElementById("nav-logout").addEventListener("click", logoutAndRedirect);
+    // escapeHtml / levelLabel は common.js に共通化
 
     load();
 
@@ -83,7 +80,7 @@
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
         const data = await res.json();
-        userLabel.textContent = `受験者：${data.username}`;
+        userLabel.textContent = `受験者：${data.username}（${levelLabel(level)}）`;
         render(data);
         loadingEl.style.display = "none";
         contentEl.style.display = "block";
@@ -102,6 +99,7 @@
       summary.innerHTML = `
         <div class="summary-head">
           <span class="summary-count">${cleared} <span class="summary-slash">/</span> ${total} 単元クリア</span>
+          <span class="summary-status ready">AIが毎回出題を生成</span>
         </div>
         <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
       `;

@@ -1082,19 +1082,9 @@ code {
   font: inherit;
   resize: vertical;
 }
-/* 受験画面: 縦の余白を詰めてスクロールを減らす */
-.app-shell--quiz .header { margin-bottom: 16px; padding-bottom: 10px; }
-.app-shell--quiz .card { padding: 18px; }
-.app-shell--quiz .question-text { margin-bottom: 12px; }
-.app-shell--quiz .quiz-header { margin-bottom: 8px; }
-.app-shell--quiz .progress-meta { margin-bottom: 4px; }
-.app-shell--quiz .choices { gap: 8px; }
-/* はい/いいえ（2択）は横並び */
-.choices--inline { flex-direction: row; }
-.choices--inline .choice { flex: 1; justify-content: center; }
-
-/* ナビバー（ログイン後の画面選択ボタン） */
-.nav-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.challenge-kind { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.challenge-kind label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: 14px; }
+.challenge-kind input { width: auto; }
 
 /* ステータスバッジ（マイページ・管理画面共通） */
 .ch-status {
@@ -1184,50 +1174,4 @@ code {
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 12px;
-}
-
-/* 暫定スコア（結果画面） */
-.provisional-note {
-  margin: 0 0 20px;
-  padding: 12px 16px;
-  border: 1px solid #c98a16;
-  background: #fff4e0;
-  color: #8a6d2f;
-  border-radius: var(--radius);
-  font-size: 14px;
-  line-height: 1.7;
-}
-.badge-challenge {
-  background: #fff4e0 !important;
-  color: #8a6d2f !important;
-  margin-left: 6px;
-}
-.review-item.challenged { box-shadow: inset 4px 0 0 #c98a16; }
-
-/* マイページ: タブ */
-.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
-.tab {
-  padding: 8px 16px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.tab:hover { background: #f0f1f4; }
-.tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
-
-/* 暫定（未処理チャレンジあり）の行を薄い黄色で塗る */
-.row-pending td { background: #fffbe6; }
-.pending-tag {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: #fff4e0;
-  color: #8a6d2f;
-  margin-left: 4px;
 }

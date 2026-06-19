@@ -158,12 +158,7 @@ def admin_reset_password(token: str, user_id: int, req: AdminPasswordResetReques
 # チャレンジ（異議申し立て）の裁定
 # ----------------------------------------------------------------------
 class AdminChallengeResolveRequest(BaseModel):
-    """認容／却下のリクエスト。受験者向けメッセージと内部の対応メモ（任意）。
-
-    resolution は認容の種別（accept でのみ使用）:
-      "correct"（正解に訂正）／"void"（ノーカウント）。既定は correct。
-    """
-    resolution: Optional[str] = "correct"
+    """認容／却下のリクエスト。受験者向けメッセージと内部の対応メモ（任意）。"""
     admin_message: Optional[str] = Field(None, max_length=2000)
     admin_note: Optional[str] = Field(None, max_length=2000)
 
@@ -181,8 +176,6 @@ def admin_challenges(token: str, status: Optional[str] = None):
     """
     _check_token(token)
     name_map = _unit_name_map()
-    # user_id → 表示名（申請者はメールでなく名前で出す）
-    name_by_uid = {u["id"]: u["display_name"] for u in db.list_users()}
     items = []
     for c in db.list_challenges(status=status):
         try:
@@ -192,7 +185,7 @@ def admin_challenges(token: str, status: Optional[str] = None):
         items.append(
             {
                 "id": c["id"],
-                "applicant": name_by_uid.get(c.get("user_id")) or c["username"],
+                "username": c["username"],
                 "level": c["level"],
                 "unit_id": c["unit_id"],
                 "unit_name": name_map.get(c["unit_id"], c["unit_id"]),
@@ -203,7 +196,6 @@ def admin_challenges(token: str, status: Optional[str] = None):
                 "snapshot": snap,
                 "status": c["status"],
                 "status_label": CHALLENGE_STATUS_LABELS.get(c["status"], c["status"]),
-                "resolution": c.get("resolution"),
                 "admin_message": c.get("admin_message"),
                 "admin_note": c.get("admin_note"),
                 "created_at": c.get("created_at"),
@@ -216,21 +208,14 @@ def admin_challenges(token: str, status: Optional[str] = None):
 
 @router.post("/api/{token}/admin/challenges/{challenge_id}/accept")
 def admin_accept_challenge(token: str, challenge_id: int, req: AdminChallengeResolveRequest):
-    """チャレンジを認容する。resolution に応じて採点を遡及訂正する。
-
-    - correct: 当該設問を正解にセット（誤答→正解で +1）
-    - void: 当該設問をノーカウント化（total -1、正解分は score も -1）
-    """
+    """チャレンジを認容する。当該設問を正解扱いに訂正し、満点化すれば通算満点に +1。"""
     _check_token(token)
     res = db.accept_challenge(
-        challenge_id, resolution=(req.resolution or "correct"),
-        admin_message=req.admin_message, admin_note=req.admin_note,
+        challenge_id, admin_message=req.admin_message, admin_note=req.admin_note
     )
     if not res["ok"]:
         if res.get("error") == "not_found":
             raise HTTPException(404, "チャレンジが見つかりません。")
-        if res.get("error") == "bad_resolution":
-            raise HTTPException(400, "resolution は correct / void のいずれか。")
         raise HTTPException(409, "未処理のチャレンジのみ認容できます。")
     return {"ok": True, "scoring": res.get("scoring")}
 

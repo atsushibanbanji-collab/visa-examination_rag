@@ -211,7 +211,6 @@ def _init_db_postgres() -> None:
                 snapshot        TEXT    NOT NULL,
                 status          TEXT    NOT NULL DEFAULT 'open',
                 scoring_applied INTEGER NOT NULL DEFAULT 0,
-                resolution      TEXT,
                 admin_message   TEXT,
                 admin_note      TEXT,
                 created_at      TEXT    NOT NULL,
@@ -224,8 +223,6 @@ def _init_db_postgres() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges(status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_user_id ON challenges(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_attempt_id ON challenges(attempt_id)")
-        # 容認の種別（correct=正解に訂正 / void=ノーカウント）。既存DBにも安全に足す。
-        cur.execute("ALTER TABLE challenges ADD COLUMN IF NOT EXISTS resolution TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -366,7 +363,6 @@ def _init_db_sqlite() -> None:
                 snapshot        TEXT    NOT NULL,
                 status          TEXT    NOT NULL DEFAULT 'open',
                 scoring_applied INTEGER NOT NULL DEFAULT 0,
-                resolution      TEXT,
                 admin_message   TEXT,
                 admin_note      TEXT,
                 created_at      TEXT    NOT NULL,
@@ -379,10 +375,6 @@ def _init_db_sqlite() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges(status)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_user_id ON challenges(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_challenges_attempt_id ON challenges(attempt_id)")
-        # 容認の種別（correct=正解に訂正 / void=ノーカウント）。既存DBにも安全に足す。
-        ch_cols = {r[1] for r in cur.execute("PRAGMA table_info(challenges)").fetchall()}
-        if "resolution" not in ch_cols:
-            cur.execute("ALTER TABLE challenges ADD COLUMN resolution TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -753,29 +745,6 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
         return True
 
 
-def change_user_email(user_id: int, new_email: str) -> dict:
-    """メールアドレスを変更する。username（＝メール）で一意管理している進捗・履歴・
-    チャレンジの該当行も同一 user_id 単位で付け替え、進捗が分裂しないようにする。
-
-    戻り値: {"ok": bool, "error"?: "not_found"|"duplicate"}
-    """
-    with get_conn() as conn:
-        u = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
-        if u is None:
-            return {"ok": False, "error": "not_found"}
-        if new_email == u["email"]:
-            return {"ok": True}  # 変更なし
-        dup = conn.execute("SELECT id FROM users WHERE email = ?", (new_email,)).fetchone()
-        if dup is not None:
-            return {"ok": False, "error": "duplicate"}
-        conn.execute("UPDATE users SET email = ? WHERE id = ?", (new_email, user_id))
-        # username（メール）で持つ既存データを新メールへ付け替える（user_id で限定）
-        conn.execute("UPDATE attempts SET username = ? WHERE user_id = ?", (new_email, user_id))
-        conn.execute("UPDATE unit_progress SET username = ? WHERE user_id = ?", (new_email, user_id))
-        conn.execute("UPDATE challenges SET username = ? WHERE user_id = ?", (new_email, user_id))
-        return {"ok": True}
-
-
 def create_auth_session(token_hash: str, user_id: int, ttl_sec: int) -> None:
     now = datetime.utcnow()
     expires = now + timedelta(seconds=ttl_sec)
@@ -980,7 +949,7 @@ def list_challenges_by_user(user_id: int) -> List[dict]:
     """受験者本人のチャレンジ一覧（マイページ用。新しい順）。"""
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, question_id, attempt_id, level, unit_id, reason, kind, snapshot, status, "
+            "SELECT id, question_id, level, unit_id, reason, kind, snapshot, status, "
             "admin_message, created_at, resolved_at, closed_at "
             "FROM challenges WHERE user_id = ? ORDER BY created_at DESC, id DESC",
             (user_id,),
@@ -988,12 +957,11 @@ def list_challenges_by_user(user_id: int) -> List[dict]:
         return [dict(r) for r in rows]
 
 
-def _adjust_perfect_count_conn(conn, username, level, unit_id, source, user_id, now, delta) -> None:
-    """既存接続内で perfect_count を delta（+1/-1）し、単元クリアを再評価する。
+def _increment_perfect_count_conn(conn, username, level, unit_id, source, user_id, now) -> None:
+    """既存接続内で perfect_count を +1 し、単元クリア（通算満点）を再評価する。
 
-    採点の遡及訂正専用（容認による双方向フリップ）。下限は0でクランプし、通算満点が
-    クリア閾値以上なら graduated_at を付与、閾値未満に戻ったら取り消す（None）。
-    streak_count・last_taken_at は触らない（連続満点は情報用で判定に使わないため）。
+    採点の遡及訂正専用。streak_count・last_taken_at は触らない
+    （連続満点は情報用でクリア判定に使わないため、遡及で動かさない）。
     """
     from backend.config import UNIT_CLEAR_REQUIRED_STREAK
     ensure_cols = """
@@ -1016,13 +984,10 @@ def _adjust_perfect_count_conn(conn, username, level, unit_id, source, user_id, 
         "WHERE username = ? AND level = ? AND unit_id = ? AND source = ?",
         (username, level, unit_id, source),
     ).fetchone()
-    new_perfect = max(0, row["perfect_count"] + delta)
-    if new_perfect >= UNIT_CLEAR_REQUIRED_STREAK:
-        # 既にクリア済みなら日時を維持、未付与なら今回付与
-        graduated_at = row["graduated_at"] or now
-    else:
-        # 閾値未満に戻ったらクリアを取り消す（再評価）
-        graduated_at = None
+    new_perfect = row["perfect_count"] + 1
+    graduated_at = row["graduated_at"]
+    if new_perfect >= UNIT_CLEAR_REQUIRED_STREAK and graduated_at is None:
+        graduated_at = now
     conn.execute(
         "UPDATE unit_progress SET perfect_count = ?, graduated_at = ? "
         "WHERE username = ? AND level = ? AND unit_id = ? AND source = ?",
@@ -1032,25 +997,17 @@ def _adjust_perfect_count_conn(conn, username, level, unit_id, source, user_id, 
 
 def accept_challenge(
     challenge_id: int,
-    resolution: str = "correct",
     admin_message: Optional[str] = None,
     admin_note: Optional[str] = None,
 ) -> dict:
     """open のチャレンジを認容し、採点を遡及訂正する（単一トランザクション・冪等）。
 
-    resolution は容認の種別（起票時の正誤に依らず一律同じ挙動）:
-      - "correct"（正解に訂正）：当該設問を正解にセットする（誤答→正解で score +1、
-        既に正解ならそのまま）。
-      - "void"（ノーカウント）：当該設問を集計から除外する（total -1、正解だった分は
-        score も -1）。例: 9/10 で1問を無効化 → 9/9。
-    いずれも満点状態が跨いだ時だけ通算満点を増減し、クリアは再評価（取り消しあり）。
+    紐付く受験（attempt）があり、当該設問が不正解だった場合のみ「正解扱い」に反転して
+    score を再計算する。満点へ跨いだ場合のみ perfect_count を +1（単元クリアに反映）。
     attempt が無い（中断起票）場合は採点反映なしでステータスのみ accepted にする。
 
-    戻り値: {"ok": bool, "error"?: str,
-             "scoring": {applied, old_score, old_total, new_score, new_total, perfect_delta}}
+    戻り値: {"ok": bool, "error"?: str, "scoring": {applied, new_score, became_perfect}}
     """
-    if resolution not in ("correct", "void"):
-        return {"ok": False, "error": "bad_resolution"}
     now = _now_iso()
     with get_conn() as conn:
         ch = conn.execute(
@@ -1061,8 +1018,7 @@ def accept_challenge(
         if ch["status"] != "open":
             return {"ok": False, "error": "not_open"}
 
-        scoring = {"applied": False, "old_score": None, "old_total": None,
-                   "new_score": None, "new_total": None, "perfect_delta": 0}
+        scoring = {"applied": False, "new_score": None, "became_perfect": False}
         attempt_id = ch["attempt_id"]
         if attempt_id is not None and not ch["scoring_applied"]:
             att = conn.execute(
@@ -1081,42 +1037,30 @@ def accept_challenge(
                 target = next(
                     (a for a in answers if a.get("id") == ch["question_id"]), None
                 )
-                if target is not None:
-                    if resolution == "void":
-                        target["voided"] = True            # 集計から除外
-                    else:  # correct
-                        target["is_correct"] = True         # 正解にセット
-                        target["voided"] = False
-                    # voided を除いて score / total を再計算する
-                    new_total = sum(1 for a in answers if not a.get("voided"))
-                    new_score = sum(
-                        1 for a in answers if a.get("is_correct") and not a.get("voided")
-                    )
-                    was_perfect = att["total"] > 0 and att["score"] == att["total"]
-                    now_perfect = new_total > 0 and new_score == new_total
-                    conn.execute(
-                        "UPDATE attempts SET score = ?, total = ?, details = ? WHERE id = ?",
-                        (new_score, new_total, json.dumps(details, ensure_ascii=False), att["id"]),
-                    )
-                    delta = 0
-                    if now_perfect and not was_perfect:
-                        delta = 1
-                    elif was_perfect and not now_perfect:
-                        delta = -1
-                    if delta:
-                        _adjust_perfect_count_conn(
-                            conn, ch["username"], ch["level"], ch["unit_id"],
-                            ch["source"], att["user_id"], now, delta,
+                # 不正解だった設問のみ正解へ反転（②内容異議で元々正解なら採点変化なし）
+                if target is not None and not target.get("is_correct", False):
+                    target["is_correct"] = True
+                    new_score = sum(1 for a in answers if a.get("is_correct"))
+                    was_perfect = att["score"] == att["total"]
+                    if new_score > att["score"]:
+                        conn.execute(
+                            "UPDATE attempts SET score = ?, details = ? WHERE id = ?",
+                            (new_score, json.dumps(details, ensure_ascii=False), att["id"]),
                         )
-                    scoring.update(
-                        applied=True, old_score=att["score"], old_total=att["total"],
-                        new_score=new_score, new_total=new_total, perfect_delta=delta,
-                    )
+                        scoring["new_score"] = new_score
+                        # 非満点→満点へ跨いだ時だけ通算満点を +1（二重計上しない）
+                        if new_score == att["total"] and not was_perfect:
+                            _increment_perfect_count_conn(
+                                conn, ch["username"], ch["level"], ch["unit_id"],
+                                ch["source"], att["user_id"], now,
+                            )
+                            scoring["became_perfect"] = True
+                    scoring["applied"] = True
 
         conn.execute(
             "UPDATE challenges SET status = 'accepted', scoring_applied = 1, "
-            "resolution = ?, admin_message = ?, admin_note = ?, resolved_at = ? WHERE id = ?",
-            (resolution, admin_message, admin_note, now, challenge_id),
+            "admin_message = ?, admin_note = ?, resolved_at = ? WHERE id = ?",
+            (admin_message, admin_note, now, challenge_id),
         )
         return {"ok": True, "scoring": scoring}
 

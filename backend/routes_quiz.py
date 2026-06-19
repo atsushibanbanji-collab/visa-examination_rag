@@ -20,7 +20,7 @@ from backend import auth, db
 from backend import rag_generator, rag_perspectives, rag_session_store, rag_source
 from backend.config import (
     ALLOWED_LEVELS,
-    CHALLENGE_USER_STATUS_LABELS,
+    CHALLENGE_STATUS_LABELS,
     RAG_HEAD_COUNT,
     RAG_QUESTIONS_PER_QUIZ,
     UNIT_CLEAR_REQUIRED_STREAK,
@@ -434,14 +434,13 @@ def my_challenges(user: dict = Depends(auth.get_current_user)):
         items.append(
             {
                 "id": c["id"],
-                "attempt_id": c.get("attempt_id"),
                 "level": c["level"],
                 "unit_id": c["unit_id"],
                 "question": snap.get("question", ""),
                 "reason": c.get("reason"),
                 "kind": c.get("kind"),
                 "status": c["status"],
-                "status_label": CHALLENGE_USER_STATUS_LABELS.get(c["status"], c["status"]),
+                "status_label": CHALLENGE_STATUS_LABELS.get(c["status"], c["status"]),
                 "admin_message": c.get("admin_message"),
                 "created_at": c.get("created_at"),
                 "resolved_at": c.get("resolved_at"),

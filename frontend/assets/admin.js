@@ -226,23 +226,20 @@
     return body;
   }
 
-  const RES_LABEL = { correct: "正解に訂正", void: "ノーカウント" };
-
   function renderChallenges(items) {
     if (items.length === 0) {
-      challengesArea.innerHTML = '<div class="empty">該当するチャレンジはありません</div>';
+      challengesArea.innerHTML = '<div class="empty">該当する異議申し立てはありません</div>';
       return;
     }
     const cards = items.map((ch) => {
+      const kind = CHALLENGE_KIND_LABEL[ch.kind] || "−";
       const statusLabel = ch.status_label || CHALLENGE_STATUS_LABEL[ch.status] || ch.status;
       const noAttempt = ch.attempt_id ? "" :
-        '<div class="ch-meta" style="color:var(--danger);">※受験未確定（中断）。採点には反映されません。</div>';
+        '<div class="ch-meta" style="color:var(--danger);">※受験未確定（中断）。認容しても採点反映はありません。</div>';
 
-      // 入力欄＋操作（未処理＝返信・メモ＋3択、処理済＝メモ＋クローズ、終端＝表示のみ）
+      // 入力欄＋操作（未処理＝返信・メモ＋認容/却下、処理済＝メモ＋クローズ、終端＝表示のみ）
       const msgRO = ch.admin_message
         ? `<div class="ch-meta">受験者への返信：${escapeHtml(ch.admin_message)}</div>` : "";
-      const resRO = ch.resolution
-        ? `<div class="ch-meta">対応：${escapeHtml(RES_LABEL[ch.resolution] || ch.resolution)}</div>` : "";
       let panel = "";
       if (ch.status === "open") {
         panel = `
@@ -251,13 +248,12 @@
           <label class="ch-field-label">対応メモ（内部・任意）</label>
           <textarea class="ch-note" data-id="${ch.id}" rows="2"></textarea>
           <div class="ch-actions">
-            <button type="button" class="btn ch-correct" data-id="${ch.id}">正解に訂正</button>
-            <button type="button" class="btn ch-void" data-id="${ch.id}">ノーカウント</button>
+            <button type="button" class="btn ch-accept" data-id="${ch.id}">認容（正解扱いに訂正）</button>
             <button type="button" class="btn btn-secondary ch-reject" data-id="${ch.id}">却下</button>
           </div>`;
       } else if (ch.status === "accepted") {
         panel = `
-          ${resRO}${msgRO}
+          ${msgRO}
           <label class="ch-field-label">対応メモ（内部・任意）</label>
           <textarea class="ch-note" data-id="${ch.id}" rows="2">${escapeHtml(ch.admin_note || "")}</textarea>
           <div class="ch-actions">
@@ -267,15 +263,15 @@
         // closed / rejected：表示のみ
         const noteRO = ch.admin_note
           ? `<div class="ch-meta">対応メモ：${escapeHtml(ch.admin_note)}</div>` : "";
-        panel = `${resRO}${msgRO}${noteRO}`;
+        panel = `${msgRO}${noteRO}`;
       }
 
       return `<div class="ch-card ch-card--${ch.status}">
         <div class="ch-head">
           <span class="ch-status ch-status--${ch.status}">${escapeHtml(statusLabel)}</span>
-          <span class="muted">${escapeHtml(ch.applicant)} ／ ${escapeHtml(ch.unit_name)}（${levelLabel(ch.level)}）／ ${fmtDate(ch.created_at)}</span>
+          <span class="muted">${escapeHtml(ch.username)} ／ ${escapeHtml(ch.unit_name)}（${levelLabel(ch.level)}）／ ${fmtDate(ch.created_at)}</span>
         </div>
-        <div class="ch-reason"><strong>チャレンジ：</strong>${escapeHtml(ch.reason || "")}</div>
+        <div class="ch-reason"><strong>申し立て（${escapeHtml(kind)}）：</strong>${escapeHtml(ch.reason || "")}</div>
         ${renderSnapshot(ch.snapshot)}
         ${noAttempt}
         ${panel}
@@ -283,10 +279,8 @@
     }).join("");
     challengesArea.innerHTML = cards;
 
-    challengesArea.querySelectorAll(".ch-correct").forEach((b) =>
-      b.addEventListener("click", () => resolveChallenge(b.dataset.id, "accept", "correct")));
-    challengesArea.querySelectorAll(".ch-void").forEach((b) =>
-      b.addEventListener("click", () => resolveChallenge(b.dataset.id, "accept", "void")));
+    challengesArea.querySelectorAll(".ch-accept").forEach((b) =>
+      b.addEventListener("click", () => resolveChallenge(b.dataset.id, "accept")));
     challengesArea.querySelectorAll(".ch-reject").forEach((b) =>
       b.addEventListener("click", () => resolveChallenge(b.dataset.id, "reject")));
     challengesArea.querySelectorAll(".ch-close").forEach((b) =>
@@ -301,13 +295,12 @@
     return v || null;
   }
 
-  // 認容（resolution: correct/void）／却下。確認ダイアログは出さず即時処理する。
-  async function resolveChallenge(id, action, resolution) {
+  // 認容／却下。確認ダイアログは出さず、入力欄の返信・メモを添えて即時処理する。
+  async function resolveChallenge(id, action) {
     const body = {
       admin_message: cardValue(id, "ch-msg"),
       admin_note: cardValue(id, "ch-note"),
     };
-    if (action === "accept") body.resolution = resolution;
     try {
       const res = await fetch(`/api/${ADMIN_TOKEN}/admin/challenges/${id}/${action}`, {
         method: "POST", headers: { "Content-Type": "application/json" },

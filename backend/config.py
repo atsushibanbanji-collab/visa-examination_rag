@@ -77,12 +77,3 @@ CHALLENGE_STATUS_LABELS = {
     "closed": "クローズ",
     "rejected": "却下",
 }
-
-# 受験者（マイページ）向けの表示ラベル。処理済／クローズは管理用の区別なので
-# 利用者には「容認」に集約し、未決定は「確認中」とする。
-CHALLENGE_USER_STATUS_LABELS = {
-    "open": "確認中",
-    "accepted": "容認",
-    "closed": "容認",
-    "rejected": "却下",
-}

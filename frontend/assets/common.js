@@ -71,10 +71,17 @@ function pillClass(pct) {
   return "low";
 }
 
-// チャレンジのステータス内部コード → 表示ラベル（管理画面用）
+// チャレンジ（異議申し立て）ステータス内部コード → 表示ラベル
 const CHALLENGE_STATUS_LABEL = {
   open: "未処理",
   accepted: "処理済",
   closed: "クローズ",
   rejected: "却下",
+};
+
+// チャレンジ種別 → 表示ラベル
+const CHALLENGE_KIND_LABEL = {
+  grading: "採点への異議",
+  content: "出題内容への異議",
+  both: "採点・内容への異議",
 };
