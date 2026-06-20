@@ -10,8 +10,10 @@
 <body>
   <div class="app-shell">
     <header class="header">
-      <h1 id="app-title">ビザ検定</h1>
-      <p class="subtitle" id="user-label"></p>
+      <div class="header-main">
+        <h1 id="app-title">ビザ検定</h1>
+        <p class="subtitle" id="user-label"></p>
+      </div>
     </header>
 
     <div id="loading" class="loading">結果を表示中…</div>
@@ -80,6 +82,7 @@
     // escapeHtml / levelLabel / fmtDate / pillClass は common.js に共通化
 
     function init() {
+      mountHeaderNav();
       const raw = sessionStorage.getItem("visa_quiz_last_result");
       if (!raw) {
         loadingEl.innerHTML = '結果データが見つかりません。<br><a href="/home.html">難易度選択へ戻る</a>';

@@ -10,24 +10,15 @@
 <body>
   <div class="app-shell">
     <header class="header">
-      <h1>ビザ検定</h1>
-      <p class="subtitle" id="user-label"></p>
+      <div class="header-main">
+        <h1>ビザ検定</h1>
+        <p class="subtitle" id="user-label"></p>
+      </div>
     </header>
 
     <div id="loading" class="loading">読み込み中…</div>
 
     <div id="content" style="display:none;">
-      <!-- ログイン中バー -->
-      <section class="card" id="account-bar">
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
-          <span id="account-name" style="font-weight: 600;"></span>
-          <span>
-            <a href="/mypage.html" class="btn btn-secondary" style="text-decoration: none; padding: 6px 12px; font-size: 13px;">マイページ</a>
-            <button type="button" id="logout-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">ログアウト</button>
-          </span>
-        </div>
-      </section>
-
       <!-- 難易度選択 -->
       <section class="card">
         <h2>難易度選択</h2>
@@ -42,9 +33,8 @@
   <script>
     const levelGrid = document.getElementById("level-grid");
     const userLabel = document.getElementById("user-label");
-    const accountName = document.getElementById("account-name");
 
-    // LEVELS / LEVEL_NAMES / requireLogin / logoutAndRedirect は common.js に共通化
+    // LEVELS / LEVEL_NAMES / requireLogin / mountHeaderNav は common.js に共通化
 
     let levels = [];
 
@@ -52,14 +42,12 @@
     async function init() {
       const me = await requireLogin();
       if (!me) return;
+      mountHeaderNav("home");
       userLabel.textContent = `受験者：${me.display_name}`;
-      accountName.textContent = `${me.display_name} さん`;
       document.getElementById("loading").style.display = "none";
       document.getElementById("content").style.display = "block";
       loadLevels();
     }
-
-    document.getElementById("logout-btn").addEventListener("click", logoutAndRedirect);
 
     // 難易度カードを押したら単元選択画面へ。
     function goToUnits(levelId) {

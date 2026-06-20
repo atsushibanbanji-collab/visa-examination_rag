@@ -64,6 +64,50 @@ async function logoutAndRedirect() {
   location.href = "/";
 }
 
+// ログイン後画面の共通ヘッダーナビ。各ページのヘッダー右側へ
+// ホーム / マイページ / ログアウト を差し込む。
+//   active : "home" / "mypage" を渡すと現在ページのボタンを強調する。
+//   opts.confirmLeave : 文字列を渡すと、移動・ログアウト前に confirm を挟む
+//                       （受験中の誤離脱防止用）。
+// ヘッダー（.header）が無いページでは何もしない。
+function mountHeaderNav(active, opts) {
+  const header = document.querySelector(".header");
+  if (!header || header.querySelector(".header-nav")) return;
+  const confirmLeave = (opts && opts.confirmLeave) || null;
+
+  const nav = document.createElement("nav");
+  nav.className = "header-nav";
+
+  const links = [
+    { key: "home", label: "ホーム", href: "/home.html" },
+    { key: "mypage", label: "マイページ", href: "/mypage.html" },
+  ];
+  for (const l of links) {
+    const a = document.createElement("a");
+    a.href = l.href;
+    a.textContent = l.label;
+    a.className = "btn btn-secondary" + (active === l.key ? " is-active" : "");
+    if (confirmLeave) {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (confirm(confirmLeave)) location.href = l.href;
+      });
+    }
+    nav.appendChild(a);
+  }
+
+  const out = document.createElement("button");
+  out.type = "button";
+  out.className = "btn btn-secondary";
+  out.textContent = "ログアウト";
+  out.addEventListener("click", () => {
+    if (!confirmLeave || confirm(confirmLeave)) logoutAndRedirect();
+  });
+  nav.appendChild(out);
+
+  header.appendChild(nav);
+}
+
 // 正答率(%) → スコアピルのCSSクラス
 function pillClass(pct) {
   if (pct >= 80) return "high";

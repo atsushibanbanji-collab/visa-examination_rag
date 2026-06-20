@@ -59,6 +59,8 @@ a { color: var(--primary); }
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 32px;
@@ -75,6 +77,27 @@ a { color: var(--primary); }
   margin: 0;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* ヘッダー左側：題字＋副題のまとまり */
+.header-main {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 12px;
+  flex-wrap: wrap;
+}
+
+/* ヘッダー右側：共通ナビ（ホーム / マイページ / ログアウト） */
+.header-nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.header-nav .btn { padding: 6px 12px; font-size: 13px; }
+.header-nav .btn.is-active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
 }
 
 /* カード */
@@ -1093,8 +1116,6 @@ code {
 .choices--inline { flex-direction: row; }
 .choices--inline .choice { flex: 1; justify-content: center; }
 
-/* ナビバー（ログイン後の画面選択ボタン） */
-.nav-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 
 /* ステータスバッジ（マイページ・管理画面共通） */
 .ch-status {

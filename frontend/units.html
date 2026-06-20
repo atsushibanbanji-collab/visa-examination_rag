@@ -10,19 +10,15 @@
 <body>
   <div class="app-shell">
     <header class="header">
-      <h1 id="app-title">ビザ検定</h1>
-      <p class="subtitle" id="user-label"></p>
+      <div class="header-main">
+        <h1 id="app-title">ビザ検定</h1>
+        <p class="subtitle" id="user-label"></p>
+      </div>
     </header>
 
     <div id="loading" class="loading">読み込み中…</div>
 
     <main id="content" style="display:none;">
-      <nav class="nav-bar">
-        <a class="btn btn-secondary" href="/home.html">難易度選択</a>
-        <a class="btn btn-secondary" href="/mypage.html">マイページ</a>
-        <button type="button" class="btn btn-secondary" id="nav-logout">ログアウト</button>
-      </nav>
-
       <section class="card">
         <h2>単元選択</h2>
         <p class="muted">
@@ -61,11 +57,11 @@
       errorMsg.textContent = msg;
     }
 
-    // escapeHtml / levelLabel / logoutAndRedirect は common.js に共通化
+    // escapeHtml / levelLabel / mountHeaderNav は common.js に共通化
 
     const appTitle = document.getElementById("app-title");
     if (appTitle) appTitle.textContent = `ビザ検定（${levelLabel(level)}）`;
-    document.getElementById("nav-logout").addEventListener("click", logoutAndRedirect);
+    mountHeaderNav();
 
     load();
 

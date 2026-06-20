@@ -9,8 +9,10 @@
 <body>
   <div class="app-shell">
     <header class="header">
-      <h1>ビザ検定</h1>
-      <p class="subtitle">マイページ</p>
+      <div class="header-main">
+        <h1>ビザ検定</h1>
+        <p class="subtitle">マイページ</p>
+      </div>
     </header>
 
     <div id="loading" class="loading">読み込み中…</div>
@@ -18,16 +20,8 @@
     <div id="content" style="display: none;">
       <!-- プロフィール（常時表示） -->
       <section class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
-          <div>
-            <div id="profile-name" style="font-size: 18px; font-weight: 600;"></div>
-            <div id="profile-email" class="muted"></div>
-          </div>
-          <span>
-            <a href="/home.html" class="btn btn-secondary" style="text-decoration: none; padding: 6px 12px; font-size: 13px;">難易度選択</a>
-            <button type="button" id="logout-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">ログアウト</button>
-          </span>
-        </div>
+        <div id="profile-name" style="font-size: 18px; font-weight: 600;"></div>
+        <div id="profile-email" class="muted"></div>
       </section>
 
       <!-- タブ -->
@@ -83,7 +77,7 @@
 
   <script src="/assets/common.js"></script>
   <script>
-    // LEVELS / requireLogin / logoutAndRedirect / levelLabel / fmtDate / pillClass は common.js
+    // LEVELS / requireLogin / mountHeaderNav / levelLabel / fmtDate / pillClass は common.js
 
     let challengeItems = [];
     let openUnitKeys = new Set();    // 未処理チャレンジのある "level:unit_id"
@@ -92,6 +86,7 @@
     async function init() {
       const me = await requireLogin();
       if (!me) return;
+      mountHeaderNav("mypage");
       document.getElementById("profile-name").textContent = `${me.display_name} さん`;
       document.getElementById("profile-email").textContent = me.email;
       document.getElementById("loading").style.display = "none";
@@ -102,8 +97,6 @@
       loadHistory();
       renderChallenges();
     }
-
-    document.getElementById("logout-btn").addEventListener("click", logoutAndRedirect);
 
     // --- タブ切替 ---
     function setupTabs() {
