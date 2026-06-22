@@ -315,6 +315,8 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "処理に失敗しました");
+      // 採点に反映されなかった（確定受験が見つからない等）場合は無音にせず明示する。
+      if (data.warning) alert("注意: " + data.warning);
       loadChallenges();   // 一覧・バッジが更新されることが処理完了の合図
     } catch (e) {
       alert("失敗: " + e.message);

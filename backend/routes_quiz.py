@@ -335,15 +335,11 @@ def submit_quiz(req: SubmitRequest, user: dict = Depends(auth.get_current_user))
     # 認容時の採点遡及訂正はこの attempt を辿って行う。
     db.link_challenges_to_attempt(req.session_id, attempt_id, user["id"])
 
-    # 単元進捗を更新（満点で連続+1、非満点で0リセット）
+    # 単元進捗を更新（derive方式：この単元の全受験を実効採点して数え直す。差分加算はしない）
     unit_progress = None
     if req.unit:
-        perfect = score == total
-        unit_progress = db.update_unit_progress(
-            user["email"], req.level, req.unit, perfect,
-            clear_streak_required=UNIT_CLEAR_REQUIRED_STREAK,  # 閾値の真実源は config に一本化
-            source=SOURCE_RAG,
-            user_id=user["id"],
+        unit_progress = db.recompute_unit_progress_tx(
+            user["id"], user["email"], req.level, req.unit, source=SOURCE_RAG
         )
 
     return {

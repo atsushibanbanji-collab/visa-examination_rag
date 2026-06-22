@@ -232,7 +232,17 @@ def admin_accept_challenge(token: str, challenge_id: int, req: AdminChallengeRes
         if res.get("error") == "bad_resolution":
             raise HTTPException(400, "resolution は correct / void のいずれか。")
         raise HTTPException(409, "未処理のチャレンジのみ認容できます。")
-    return {"ok": True, "scoring": res.get("scoring")}
+
+    # 採点に反映されなかった場合（確定した受験が見つからない＝中断/やり直し等）は
+    # 無音で成功扱いにせず、明示して返す。
+    scoring = res.get("scoring") or {}
+    out = {"ok": True, "scoring": scoring}
+    if not scoring.get("applied"):
+        out["warning"] = (
+            "この異議に対応する確定した受験が見つからないため、採点（正解訂正／"
+            "ノーカウント）は反映されていません。"
+        )
+    return out
 
 
 @router.post("/api/{token}/admin/challenges/{challenge_id}/reject")
