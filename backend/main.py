@@ -35,6 +35,15 @@ app.add_middleware(
 rag_perspectives.load()   # 観点メタ（perspectives/*.json）をメモリへ
 db.init_db()              # SQLite スキーマ初期化
 
+# 採点の派生(derive)方式への移行（冪等）。過去データの素の採点を整え、
+# score/total と単元進捗を再計算する。データ規模が小さいため起動毎に走らせても安く、
+# 何回流しても同じ結果になる。移行でこけてもアプリ起動は止めない（新規分の計算は正しい）。
+try:
+    db.migrate_scoring_to_derive()
+except Exception as _mig_err:  # noqa: BLE001
+    import logging
+    logging.getLogger("uvicorn.error").warning("scoring migration skipped: %s", _mig_err)
+
 # --- ルーター登録 ---
 app.include_router(quiz_router)
 app.include_router(admin_router)
