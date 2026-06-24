@@ -83,8 +83,7 @@
     const rows = users.map((u) => {
       const chips = (u.units || []).map(progressChip).join(" ");
       return `<tr>
-        <td><button type="button" class="user-link" data-user-id="${u.user_id}" data-user="${escapeHtml(u.username)}">${escapeHtml(u.username)}</button>
-            <div class="muted" style="font-size: 11px;">${escapeHtml(u.email)}</div></td>
+        <td><button type="button" class="user-link" data-user-id="${u.user_id}" data-user="${escapeHtml(u.username)}">${escapeHtml(u.username)}</button></td>
         <td class="cleared-num">${u.cleared_count}</td>
         <td class="last-taken">${u.last_taken_at ? fmtDate(u.last_taken_at) : '<span class="muted">−</span>'}</td>
         <td class="prog-cell">${chips || '<span class="muted">進捗なし</span>'}</td>
