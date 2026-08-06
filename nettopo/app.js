@@ -397,11 +397,84 @@ function bindProps() {
   });
 }
 
+// ---------------- スマホ用ドロワー ----------------
+const isMobile = () => window.matchMedia("(max-width: 768px)").matches;
+
+function openDrawer(which) {
+  closeDrawers();
+  $(which).classList.add("is-open");
+  $("drawer-backdrop").hidden = false;
+}
+
+function closeDrawers() {
+  $("palette").classList.remove("is-open");
+  $("props").classList.remove("is-open");
+  $("drawer-backdrop").hidden = true;
+}
+
+function bindDrawers() {
+  $("mb-palette").addEventListener("click", () => openDrawer("palette"));
+  $("mb-props").addEventListener("click", () => openDrawer("props"));
+  // click だとタップ由来の合成clickが「開いた直後のドロワー」を即閉じしてしまうため
+  // pointerdown（新しいタップの開始）でのみ閉じる。
+  $("drawer-backdrop").addEventListener("pointerdown", closeDrawers);
+  for (const b of document.querySelectorAll(".drawer-close")) {
+    b.addEventListener("click", closeDrawers);
+  }
+}
+
 // ---------------- ポインタ操作（ドラッグ・パン・クリック） ----------------
 let drag = null; // { kind: "node", id, dx, dy, moved } | { kind: "pan", sx, sy, vx, vy }
 
+// ピンチズーム用: 画面に触れている指（ポインタ）を追跡する
+const activePointers = new Map(); // pointerId -> {x, y}（client座標）
+let pinch = null;                 // {d, cx, cy} 直前の2本指の距離と中点
+
+// ポインタ捕捉。ドラッグ中に指がSVG外へ出ても追跡し続けるための補助で、
+// 失敗しても操作は成立するため例外は無視する。
+function capturePointer(ev) {
+  try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* no-op */ }
+}
+
+function pinchState() {
+  const [a, b] = [...activePointers.values()];
+  return { d: Math.hypot(b.x - a.x, b.y - a.y) || 1,
+           cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+}
+
+// 2本指の移動に合わせて、中点直下のキャンバス座標を保ったままズーム・パンする
+function handlePinch() {
+  const np = pinchState();
+  const rect = svg.getBoundingClientRect();
+  const mx = viewBox.x + (np.cx - rect.left) / rect.width * viewBox.w;
+  const my = viewBox.y + (np.cy - rect.top) / rect.height * viewBox.h;
+  let factor = pinch.d / np.d; // 指を広げる→拡大（viewBox縮小）
+  factor = Math.min(8000 / viewBox.w, Math.max(300 / viewBox.w, factor));
+  viewBox.w *= factor;
+  viewBox.h *= factor;
+  viewBox.x = mx - (np.cx - rect.left) / rect.width * viewBox.w;
+  viewBox.y = my - (np.cy - rect.top) / rect.height * viewBox.h;
+  applyViewBox();
+  pinch = np;
+}
+
 svg.addEventListener("pointerdown", (ev) => {
   if (ev.button !== 0) return;
+
+  // 2本目の指が着いたらピンチズームへ移行（進行中のドラッグは打ち切る）
+  activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (activePointers.size === 2) {
+    if (drag && drag.kind === "node") {
+      const g = layerNodes.querySelector(`g[data-id="${drag.id}"]`);
+      if (g) g.classList.remove("dragging");
+      if (drag.moved) markDirty();
+    }
+    drag = null;
+    pinch = pinchState();
+    return;
+  }
+  if (activePointers.size > 2) return;
+
   const nodeG = ev.target.closest("g.node");
   const linkG = ev.target.closest("g.link");
   const p = clientToCanvas(ev);
@@ -423,14 +496,18 @@ svg.addEventListener("pointerdown", (ev) => {
     const n = nodeById(id);
     drag = { kind: "node", id, dx: p.x - n.x, dy: p.y - n.y, moved: false };
     nodeG.classList.add("dragging");
-    svg.setPointerCapture(ev.pointerId);
+    capturePointer(ev);
     return;
   }
 
   if (linkG) {
     const id = linkG.dataset.id;
     if (mode === "delete") { removeLink(id); return; }
-    if (mode === "select") { select({ kind: "link", id }); renderAll(); }
+    if (mode === "select") {
+      select({ kind: "link", id });
+      if (isMobile()) openDrawer("props");
+      renderAll();
+    }
     return;
   }
 
@@ -438,10 +515,14 @@ svg.addEventListener("pointerdown", (ev) => {
   if (connectFrom) { connectFrom = null; renderAll(); }
   if (selection) { select(null); renderAll(); }
   drag = { kind: "pan", sx: ev.clientX, sy: ev.clientY, vx: viewBox.x, vy: viewBox.y };
-  svg.setPointerCapture(ev.pointerId);
+  capturePointer(ev);
 });
 
 svg.addEventListener("pointermove", (ev) => {
+  if (activePointers.has(ev.pointerId)) {
+    activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  }
+  if (pinch && activePointers.size >= 2) { handlePinch(); return; }
   if (!drag) return;
   if (drag.kind === "node") {
     const p = clientToCanvas(ev);
@@ -459,7 +540,12 @@ svg.addEventListener("pointermove", (ev) => {
   }
 });
 
-svg.addEventListener("pointerup", (ev) => {
+svg.addEventListener("pointerup", onPointerEnd);
+svg.addEventListener("pointercancel", onPointerEnd);
+
+function onPointerEnd(ev) {
+  activePointers.delete(ev.pointerId);
+  if (activePointers.size < 2) pinch = null;
   if (!drag) return;
   if (drag.kind === "node") {
     const g = layerNodes.querySelector(`g[data-id="${drag.id}"]`);
@@ -467,13 +553,14 @@ svg.addEventListener("pointerup", (ev) => {
     if (drag.moved) {
       markDirty();
     } else {
-      // 動かしていなければクリック＝選択
+      // 動かしていなければクリック＝選択。スマホでは編集ドロワーを開く
       select({ kind: "node", id: drag.id });
+      if (isMobile()) openDrawer("props");
     }
     renderAll();
   }
   drag = null;
-});
+}
 
 // ホイールでカーソル位置を中心にズーム
 svg.addEventListener("wheel", (ev) => {
@@ -526,6 +613,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     connectFrom = null;
     select(null);
+    closeDrawers();
     renderAll();
   } else if (ev.key === "Delete" || ev.key === "Backspace") {
     if (selection && selection.kind === "node") removeNode(selection.id);
@@ -643,7 +731,10 @@ function bindPalette() {
     name.className = "name";
     name.textContent = t.name;
     b.append(icon, name);
-    b.addEventListener("click", () => addNode(t.id));
+    b.addEventListener("click", () => {
+      addNode(t.id);
+      if (isMobile()) closeDrawers(); // 追加したノードが見えるように閉じる
+    });
     list.appendChild(b);
   }
 }
@@ -666,6 +757,7 @@ function init() {
   bindProps();
   bindDiagramControls();
   bindViewControls();
+  bindDrawers();
   renderDiagramSelect();
   zoomToFit();
   renderAll();

@@ -42,6 +42,16 @@ services:
       #   RAGをPDF根拠で動かす場合は、デプロイ後に手動配置する。
       #   未配置でも観点要約（summary）を根拠に動作する。
 
+  # ===== NetTopo（ネットワーク構成図エディタ） =====
+  # ビザ検定とは無関係の趣味プロジェクト（nettopo/ ディレクトリ）。
+  # サーバ処理なしの静的サイトのため無料で公開できる。別サービスとして分離。
+  - type: web
+    name: nettopo
+    runtime: static
+    branch: main
+    buildCommand: ""
+    staticPublishPath: nettopo
+
 # データベース（Webサービスとは独立したサービスとして稼働。
 # Web側の再デプロイの影響を受けず、自動バックアップ付き）。
 # 注意: plan: free は作成から30日で期限切れになる試用品のため、本採用では有料プランにする。

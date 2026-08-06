@@ -260,9 +260,72 @@ select {
 #status-mode { color: var(--accent-2); }
 .status-help { margin-left: auto; }
 
-/* 狭い画面では右パネルを下に回さず縮める（簡易対応） */
-@media (max-width: 900px) {
-  .palette { width: 170px; flex-basis: 170px; }
-  .props { width: 220px; flex-basis: 220px; }
+/* ---------- スマホ用UI（下部バー・ドロワー） ---------- */
+.mobile-bar { display: none; }
+.drawer-close { display: none; }
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .5);
+  z-index: 40;
+}
+
+/* やや狭い画面: パネル幅だけ詰める */
+@media (max-width: 1000px) and (min-width: 769px) {
+  .palette { width: 180px; flex-basis: 180px; }
+  .props { width: 230px; flex-basis: 230px; }
   .brand-sub { display: none; }
+}
+
+/* スマホ: 左右パネルをドロワー化し、下部ツールバーで操作する */
+@media (max-width: 768px) {
+  .brand-sub { display: none; }
+  .topbar { padding: 6px 10px; gap: 6px; }
+  .diagram-name { width: 130px; }
+  .sep { display: none; }
+  .save-status { min-width: 0; }
+
+  .palette, .props {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 80vw;
+    max-width: 320px;
+    z-index: 50;
+    transition: transform .2s ease;
+    box-shadow: 0 0 24px rgba(0, 0, 0, .5);
+  }
+  .palette { left: 0; transform: translateX(-102%); border-right: 1px solid var(--border); }
+  .props   { right: 0; transform: translateX(102%); border-left: 1px solid var(--border); }
+  .palette.is-open, .props.is-open { transform: translateX(0); }
+
+  .drawer-close {
+    display: block;
+    width: 100%;
+    margin-bottom: 10px;
+    padding: 8px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
+  }
+
+  /* ドロワー内のモード切替・ズームは下部バーと重複するため隠して簡素にする */
+  .palette .mode-buttons, .palette h2:nth-of-type(2) { display: none; }
+
+  .mobile-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+  }
+  .mobile-bar .btn { flex: 1; padding: 10px 4px; font-size: 13px; white-space: nowrap; }
+
+  .statusbar { display: none; }
+
+  /* タッチしやすいサイズに */
+  .palette-item { padding: 12px 4px; }
+  .props-form input, .props-form textarea, .props-form select { font-size: 16px; } /* iOSの自動ズーム防止 */
 }

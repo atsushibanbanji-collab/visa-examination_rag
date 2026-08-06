@@ -35,8 +35,9 @@
 
     <div class="main">
 
-      <!-- ===== 左: 機器パレット ===== -->
-      <aside class="palette">
+      <!-- ===== 左: 機器パレット（スマホではドロワー表示） ===== -->
+      <aside class="palette" id="palette">
+        <button class="drawer-close" data-close>✕ 閉じる</button>
         <h2>機器パレット</h2>
         <p class="hint">クリックでキャンバスに追加</p>
         <div id="palette-list" class="palette-list"></div>
@@ -78,8 +79,9 @@
         <div id="canvas-hint" class="canvas-hint"></div>
       </div>
 
-      <!-- ===== 右: プロパティパネル ===== -->
+      <!-- ===== 右: プロパティパネル（スマホではドロワー表示） ===== -->
       <aside class="props" id="props">
+        <button class="drawer-close" data-close>✕ 閉じる</button>
         <h2>プロパティ</h2>
         <div id="props-empty" class="props-empty">
           ノードまたは接続線をクリックすると<br>ここで編集できます。
@@ -124,6 +126,18 @@
         </div>
       </aside>
     </div>
+
+    <!-- ドロワー表示時の背景（タップで閉じる） -->
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+    <!-- ===== スマホ用の下部ツールバー ===== -->
+    <nav class="mobile-bar">
+      <button class="btn mode-btn is-active" data-mode="select" title="選択">✥ 選択</button>
+      <button class="btn mode-btn" data-mode="connect" title="接続">⤳ 接続</button>
+      <button class="btn mode-btn" data-mode="delete" title="削除">✕ 削除</button>
+      <button id="mb-palette" class="btn" title="機器を追加">＋ 機器</button>
+      <button id="mb-props" class="btn" title="選択中の要素を編集">📝 編集</button>
+    </nav>
 
     <footer class="statusbar">
       <span id="status-mode"></span>
